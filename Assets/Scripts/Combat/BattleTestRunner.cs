@@ -3,28 +3,26 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Scene test component: attach to a GameObject, assign two HeroData assets in
-/// the Inspector, and press Play. Builds a HeroInstance for each, lets a
-/// <see cref="TurnManager"/> decide turn order on the speed bar, and has each
-/// acting unit attack the other until one falls (or the safety turn limit is
-/// reached). Cooldowns tick at the start of each acting hero's turn, and a
-/// hero prefers its first ready skill (via
-/// <see cref="CombatManager.PerformSkill"/>) over the basic attack.
+/// Scene test harness: attach to a GameObject and assign two HeroData assets
+/// in the Inspector (the same asset is fine for all six heroes). Press Play
+/// to run a deterministic 3v3 battle: three HeroInstances per team, turn
+/// order by highest current Speed each round, first ready skill preferred
+/// over the basic attack, first living enemy targeted (heals target self).
 ///
-/// The battle runs as a coroutine with a one-second pause between turns so it
-/// can be watched, and <see cref="OnGUI"/> draws a simple runtime HUD (no
-/// Canvas needed): health bars for both heroes, the five most recent combat
-/// events, and a large banner announcing the winner.
+/// <see cref="OnGUI"/> draws a simple development HUD (no Canvas needed):
+/// three health bars per side, the five most recent combat events, and a
+/// large banner announcing the winning team. The original 1v1 battle
+/// routine is kept unchanged as a minimal regression fixture.
 /// </summary>
 public class BattleTestRunner : MonoBehaviour
 {
-    /// <summary>First combatant's HeroData asset (assign in the Inspector).</summary>
+    /// <summary>Team 1's HeroData template - each slot spawns its own HeroInstance (assign in the Inspector).</summary>
     public HeroData hero1Data;
 
-    /// <summary>Second combatant's HeroData asset (assign in the Inspector).</summary>
+    /// <summary>Team 2's HeroData template - each slot spawns its own HeroInstance (assign in the Inspector).</summary>
     public HeroData hero2Data;
 
-    /// <summary>Hard cap on loop iterations so a battle can never hang Play mode.</summary>
+    /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
 
     /// <summary>Real-time seconds to pause between turns so the fight is watchable.</summary>
@@ -33,11 +31,20 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>How many recent battle events to keep for the on-screen log.</summary>
     private const int MaxLogEntries = 5;
 
-    /// <summary>Runtime instance for hero1's side; kept as a field so OnGUI can draw its health bar.</summary>
+    /// <summary>1v1 runner's left hero; kept as a field so OnGUI can draw its health bar.</summary>
     private HeroInstance hero1;
 
-    /// <summary>Runtime instance for hero2's side; kept as a field so OnGUI can draw its health bar.</summary>
+    /// <summary>1v1 runner's right hero; kept as a field so OnGUI can draw its health bar.</summary>
     private HeroInstance hero2;
+
+    /// <summary>Team 1 of the 3v3 battle; kept as a field so OnGUI can draw its heroes' health bars.</summary>
+    private Team team1;
+
+    /// <summary>Team 2 of the 3v3 battle; kept as a field so OnGUI can draw its heroes' health bars.</summary>
+    private Team team2;
+
+    /// <summary>The running 3v3 battle; drives turn selection and the victory check.</summary>
+    private TeamBattle teamBattle;
 
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
@@ -62,17 +69,17 @@ public class BattleTestRunner : MonoBehaviour
 
     private void Start()
     {
-        StartCoroutine(RunBattleRoutine());
+        StartCoroutine(RunTeamBattleRoutine());
     }
 
-    /// <summary>Starts a battle with no injected skills.</summary>
+    /// <summary>Starts a 1v1 battle with no injected skills (kept for minimal regression testing).</summary>
     public IEnumerator RunBattleRoutine()
     {
         return RunBattleRoutine(null, null);
     }
 
     /// <summary>
-    /// Runs the full battle as a coroutine: one attack (or skill) per
+    /// Runs the original 1v1 battle as a coroutine: one attack (or skill) per
     /// <see cref="SecondsPerTurn"/> interval until a hero dies or the safety
     /// limit is reached. Optional skill lists are granted to each side at
     /// spawn, mainly so tests can exercise the skill path.
@@ -178,6 +185,90 @@ public class BattleTestRunner : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Runs a deterministic 3v3 battle as a coroutine: three HeroInstances per
+    /// team built from the Inspector's HeroData templates (the same asset may
+    /// be used for all six), one second between turns, first ready skill
+    /// preferred over the basic attack, first living enemy targeted (heals
+    /// target self), until a team is wiped or the safety cap is hit.
+    /// </summary>
+    public IEnumerator RunTeamBattleRoutine()
+    {
+        if (hero1Data == null || hero2Data == null)
+        {
+            Debug.LogWarning("BattleTestRunner: assign both HeroData assets in the Inspector before starting the battle.");
+            battleEnded = true;
+            winnerName = "Nobody";
+            yield break;
+        }
+
+        team1 = BuildTeam(hero1Data, prefix: string.Empty);
+        team2 = BuildTeam(hero2Data, prefix: "Enemy ");
+        teamBattle = new TeamBattle(team1, team2);
+        battleLog.Clear();
+        battleEnded = false;
+        winnerName = string.Empty;
+
+        while (!teamBattle.BattleOver)
+        {
+            // One-second breather between turns so the fight unfolds visibly.
+            yield return new WaitForSeconds(SecondsPerTurn);
+
+            HeroInstance actor = teamBattle.GetNextActor();
+            if (actor == null)
+            {
+                break;
+            }
+
+            string battleEvent = teamBattle.PerformTurn(actor);
+            if (battleEvent != null)
+            {
+                AddBattleEvent(battleEvent);
+            }
+        }
+
+        battleEnded = true;
+        if (ReferenceEquals(teamBattle.Winner, team1))
+        {
+            winnerName = "Team 1";
+        }
+        else if (ReferenceEquals(teamBattle.Winner, team2))
+        {
+            winnerName = "Team 2";
+        }
+        else
+        {
+            winnerName = "Nobody";
+        }
+
+        if (winnerName == "Nobody")
+        {
+            Debug.LogWarning($"Battle hit the {TeamBattle.MaxTurns}-turn safety limit and ended in a draw.");
+        }
+        else
+        {
+            Debug.Log($"{winnerName} wins the battle!");
+        }
+    }
+
+    /// <summary>
+    /// Builds a team of three independent HeroInstances from one HeroData
+    /// template, labeling each instance ("Warrior 1", "Enemy Warrior 2", ...)
+    /// so look-alike heroes stay readable in logs and the HUD.
+    /// </summary>
+    private static Team BuildTeam(HeroData template, string prefix)
+    {
+        var team = new Team();
+        for (int i = 0; i < Team.MaxSize; i++)
+        {
+            var hero = new HeroInstance(template);
+            hero.displayName = $"{prefix}{template.heroName} {i + 1}";
+            team.Add(hero);
+        }
+
+        return team;
+    }
+
     /// <summary>Records a battle event, most recent first, keeping only the last five.</summary>
     private void AddBattleEvent(string message)
     {
@@ -189,23 +280,57 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
-    /// Simple immediate-mode HUD: hero panels (name, scaled red health bar,
-    /// and "HP: X/Y" text) on the left and right of the screen, the last five
-    /// battle events along the bottom, and a large centered "{winner} wins!"
-    /// banner once the battle has ended.
+    /// Simple immediate-mode HUD: 3v3 shows each team's three hero panels
+    /// stacked on its side of the screen; the legacy 1v1 view shows one panel
+    /// per side. Below both, the last five battle events, and a large
+    /// centered "{winner} wins!" banner once the battle has ended.
     /// </summary>
     private void OnGUI()
     {
+        if (team1 != null && team2 != null)
+        {
+            DrawTeamHud();
+            return;
+        }
+
         if (hero1 == null || hero2 == null)
         {
             return;
         }
 
         EnsureStyles();
-
         float panelWidth = Mathf.Min(380f, Screen.width * 0.5f - 40f);
         DrawHeroPanel(hero1, new Rect(20f, 20f, panelWidth, 104f), TextAnchor.MiddleLeft);
         DrawHeroPanel(hero2, new Rect(Screen.width - panelWidth - 20f, 20f, panelWidth, 104f), TextAnchor.MiddleRight);
+        DrawSharedHud();
+    }
+
+    /// <summary>
+    /// 3v3 HUD: team 1's three heroes stacked on the left, team 2's on the
+    /// right. Same panel style as the 1v1 view, just stacked to fit six.
+    /// </summary>
+    private void DrawTeamHud()
+    {
+        EnsureStyles();
+        float panelWidth = Mathf.Min(380f, Screen.width * 0.5f - 40f);
+        for (int i = 0; i < team1.Members.Count; i++)
+        {
+            Rect rect = new Rect(20f, 20f + i * 112f, panelWidth, 104f);
+            DrawHeroPanel(team1.Members[i], rect, TextAnchor.MiddleLeft);
+        }
+
+        for (int i = 0; i < team2.Members.Count; i++)
+        {
+            Rect rect = new Rect(Screen.width - panelWidth - 20f, 20f + i * 112f, panelWidth, 104f);
+            DrawHeroPanel(team2.Members[i], rect, TextAnchor.MiddleRight);
+        }
+
+        DrawSharedHud();
+    }
+
+    /// <summary>Draws the battle log and the winner banner shared by both HUD modes.</summary>
+    private void DrawSharedHud()
+    {
         DrawBattleLog();
 
         if (battleEnded)
@@ -224,7 +349,7 @@ public class BattleTestRunner : MonoBehaviour
         nameStyle.alignment = alignment;
         hpStyle.alignment = alignment;
 
-        GUI.Label(new Rect(rect.x, rect.y, rect.width, 32f), hero.data.heroName, nameStyle);
+        GUI.Label(new Rect(rect.x, rect.y, rect.width, 32f), hero.displayName, nameStyle);
 
         Rect barRect = new Rect(rect.x, rect.y + 40f, rect.width, 28f);
 

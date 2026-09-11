@@ -49,8 +49,8 @@ public static class CombatManager
     /// <param name="skill">The skill being used.</param>
     public static void PerformSkill(HeroInstance attacker, HeroInstance defender, SkillData skill)
     {
-        string attackerName = attacker.data.heroName;
-        string defenderName = defender.data.heroName;
+        string attackerName = attacker.displayName;
+        string defenderName = defender.displayName;
 
         if (skill.type == SkillType.Damage)
         {

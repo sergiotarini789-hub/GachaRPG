@@ -30,6 +30,13 @@ public class HeroInstance
     /// <summary>Whether the hero is still alive and able to take turns.</summary>
     public bool isAlive;
 
+    /// <summary>
+    /// Runtime label for logs and UI. Defaults to the template's heroName;
+    /// the test harness relabels look-alike heroes (e.g. "Warrior 2") so
+    /// battle logs stay readable.
+    /// </summary>
+    public string displayName;
+
     /// <summary>Skills this hero can use in battle. Populate at spawn time from the hero's kit.</summary>
     public List<SkillData> skills;
 
@@ -50,6 +57,7 @@ public class HeroInstance
         currentDefense = sourceData.baseDefense;
         currentSpeed = sourceData.baseSpeed;
         isAlive = true;
+        displayName = sourceData.heroName;
 
         // Copy the kit so runtime cooldown tracking never mutates the shared
         // HeroData asset (or another hero built from the same template).
