@@ -7,7 +7,9 @@ using UnityEngine;
 /// the Inspector, and press Play. Builds a HeroInstance for each, lets a
 /// <see cref="TurnManager"/> decide turn order on the speed bar, and has each
 /// acting unit attack the other until one falls (or the safety turn limit is
-/// reached).
+/// reached). Cooldowns tick at the start of each acting hero's turn, and a
+/// hero prefers its first ready skill (via
+/// <see cref="CombatManager.PerformSkill"/>) over the basic attack.
 ///
 /// The battle runs as a coroutine with a one-second pause between turns so it
 /// can be watched, and <see cref="OnGUI"/> draws a simple runtime HUD (no
@@ -37,7 +39,7 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Runtime instance for hero2's side; kept as a field so OnGUI can draw its health bar.</summary>
     private HeroInstance hero2;
 
-    /// <summary>Last few attack messages, most recent first.</summary>
+    /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
 
     /// <summary>True once the battle finished (win, draw, or safety limit).</summary>
@@ -46,24 +48,36 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Name shown in the end-of-battle banner ("Nobody" on a draw).</summary>
     private string winnerName = string.Empty;
 
-    // Cached IMGUI styles, built lazily inside OnGUI at readable font sizes.
+    // Cached IMGUI resources, built lazily inside OnGUI.
     private GUIStyle nameStyle;
     private GUIStyle hpStyle;
     private GUIStyle logHeaderStyle;
     private GUIStyle logStyle;
     private GUIStyle winnerStyle;
 
+    // 1x1 solid white texture. Tinting GUI.Box darkens colors (its texture is
+    // multiplied in), which made the red health fill nearly invisible - a
+    // tinted DrawTexture of pure white renders the exact color instead.
+    private Texture2D whiteTexture;
+
     private void Start()
     {
         StartCoroutine(RunBattleRoutine());
     }
 
-    /// <summary>
-    /// Runs the full battle as a coroutine: one attack per
-    /// <see cref="SecondsPerTurn"/> interval until a hero dies or the safety
-    /// limit is reached. Public so tests and other scripts can drive it.
-    /// </summary>
+    /// <summary>Starts a battle with no injected skills.</summary>
     public IEnumerator RunBattleRoutine()
+    {
+        return RunBattleRoutine(null, null);
+    }
+
+    /// <summary>
+    /// Runs the full battle as a coroutine: one attack (or skill) per
+    /// <see cref="SecondsPerTurn"/> interval until a hero dies or the safety
+    /// limit is reached. Optional skill lists are granted to each side at
+    /// spawn, mainly so tests can exercise the skill path.
+    /// </summary>
+    public IEnumerator RunBattleRoutine(List<SkillData> hero1Skills, List<SkillData> hero2Skills)
     {
         if (hero1Data == null || hero2Data == null)
         {
@@ -74,7 +88,17 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         hero1 = new HeroInstance(hero1Data);
+        if (hero1Skills != null)
+        {
+            hero1.skills.AddRange(hero1Skills);
+        }
+
         hero2 = new HeroInstance(hero2Data);
+        if (hero2Skills != null)
+        {
+            hero2.skills.AddRange(hero2Skills);
+        }
+
         var turnManager = new TurnManager(new List<HeroInstance> { hero1, hero2 });
         battleLog.Clear();
         battleEnded = false;
@@ -89,11 +113,49 @@ public class BattleTestRunner : MonoBehaviour
             HeroInstance actor = turnManager.GetNextTurn();
             HeroInstance target = ReferenceEquals(actor, hero1) ? hero2 : hero1;
 
-            int damage = CombatManager.CalculateDamage(actor, target);
-            CombatManager.PerformAttack(actor, target);
-            AddBattleEvent(
-                $"{actor.data.heroName} attacks {target.data.heroName} for {damage} damage. " +
-                $"({target.data.heroName} HP: {target.currentHealth}/{target.data.baseHealth})");
+            // Cooldowns recover at the start of the acting hero's turn.
+            actor.TickCooldowns();
+
+            // Prefer the first ready skill; fall back to the basic attack.
+            SkillData readySkill = null;
+            foreach (SkillData skill in actor.skills)
+            {
+                if (actor.IsSkillReady(skill))
+                {
+                    readySkill = skill;
+                    break;
+                }
+            }
+
+            if (readySkill != null)
+            {
+                if (readySkill.type == SkillType.Heal)
+                {
+                    int healthBefore = actor.currentHealth;
+                    CombatManager.PerformSkill(actor, target, readySkill);
+                    AddBattleEvent(
+                        $"{actor.data.heroName} uses {readySkill.skillName} and recovers " +
+                        $"{actor.currentHealth - healthBefore} HP ({actor.currentHealth}/{actor.data.baseHealth})");
+                }
+                else
+                {
+                    int healthBefore = target.currentHealth;
+                    CombatManager.PerformSkill(actor, target, readySkill);
+                    AddBattleEvent(
+                        $"{actor.data.heroName} uses {readySkill.skillName} on {target.data.heroName} " +
+                        $"for {healthBefore - target.currentHealth} damage " +
+                        $"({target.data.heroName} HP: {target.currentHealth}/{target.data.baseHealth})");
+                }
+            }
+            else
+            {
+                int damage = CombatManager.CalculateDamage(actor, target);
+                CombatManager.PerformAttack(actor, target);
+                AddBattleEvent(
+                    $"{actor.data.heroName} attacks {target.data.heroName} for {damage} damage " +
+                    $"({target.data.heroName} HP: {target.currentHealth}/{target.data.baseHealth})");
+            }
+
             turnCount++;
         }
 
@@ -127,10 +189,10 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
-    /// Simple immediate-mode HUD: hero panels (name, red health bar scaled by
-    /// current/max health, and "HP: X/Y" text) on the left and right of the
-    /// screen, the last five battle events along the bottom, and a large
-    /// centered "{winner} wins!" banner once the battle has ended.
+    /// Simple immediate-mode HUD: hero panels (name, scaled red health bar,
+    /// and "HP: X/Y" text) on the left and right of the screen, the last five
+    /// battle events along the bottom, and a large centered "{winner} wins!"
+    /// banner once the battle has ended.
     /// </summary>
     private void OnGUI()
     {
@@ -165,12 +227,21 @@ public class BattleTestRunner : MonoBehaviour
         GUI.Label(new Rect(rect.x, rect.y, rect.width, 32f), hero.data.heroName, nameStyle);
 
         Rect barRect = new Rect(rect.x, rect.y + 40f, rect.width, 28f);
-        GUI.Box(barRect, string.Empty); // dark frame/background of the bar
 
-        // Inner red fill scales with remaining health (max = baseHealth).
+        // Thin white frame so the bar reads against any background.
+        GUI.color = Color.white;
+        GUI.DrawTexture(new Rect(barRect.x - 2f, barRect.y - 2f, barRect.width + 4f, barRect.height + 4f), whiteTexture);
+
+        // Dark track behind the fill.
+        GUI.color = new Color(0.12f, 0.12f, 0.12f, 1f);
+        GUI.DrawTexture(barRect, whiteTexture);
+
+        // Bright red fill that shrinks proportionally with remaining health
+        // (max health = baseHealth). Drawn as a tinted white texture so the
+        // color stays vivid; tinted GUI.Box was rendering almost black.
         float fill = Mathf.Clamp01((float)hero.currentHealth / Mathf.Max(1, hero.data.baseHealth));
-        GUI.color = Color.red;
-        GUI.Box(new Rect(barRect.x + 2f, barRect.y + 2f, (barRect.width - 4f) * fill, barRect.height - 4f), string.Empty);
+        GUI.color = new Color(0.95f, 0.15f, 0.15f, 1f);
+        GUI.DrawTexture(new Rect(barRect.x + 2f, barRect.y + 2f, (barRect.width - 4f) * fill, barRect.height - 4f), whiteTexture);
         GUI.color = Color.white;
 
         GUI.Label(new Rect(rect.x, rect.y + 74f, rect.width, 26f), $"HP: {hero.currentHealth}/{hero.data.baseHealth}", hpStyle);
@@ -196,12 +267,19 @@ public class BattleTestRunner : MonoBehaviour
         }
     }
 
-    /// <summary>Builds the IMGUI styles once, at readable font sizes.</summary>
+    /// <summary>Builds the IMGUI styles and shared textures once, at readable sizes.</summary>
     private void EnsureStyles()
     {
         if (nameStyle != null)
         {
             return;
+        }
+
+        if (whiteTexture == null)
+        {
+            whiteTexture = new Texture2D(1, 1);
+            whiteTexture.SetPixel(0, 0, Color.white);
+            whiteTexture.Apply();
         }
 
         nameStyle = MakeStyle(24, FontStyle.Bold);

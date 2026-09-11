@@ -36,4 +36,47 @@ public static class CombatManager
             $"{attacker.data.heroName} attacks {defender.data.heroName} for {damage} damage. " +
             $"{defender.data.heroName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
     }
+
+    /// <summary>
+    /// Resolves one skill use, scaling with the attacker's currentAttack:
+    /// Damage skills hit the defender for (attack x multiplier - defense,
+    /// minimum 1); Heal skills restore the attacker's own health (capped at
+    /// base health). Puts the skill on cooldown at the end. Readiness should
+    /// be checked first via <see cref="HeroInstance.IsSkillReady"/>.
+    /// </summary>
+    /// <param name="attacker">The unit using the skill.</param>
+    /// <param name="defender">The opposing unit (target of damage skills).</param>
+    /// <param name="skill">The skill being used.</param>
+    public static void PerformSkill(HeroInstance attacker, HeroInstance defender, SkillData skill)
+    {
+        string attackerName = attacker.data.heroName;
+        string defenderName = defender.data.heroName;
+
+        if (skill.type == SkillType.Damage)
+        {
+            int damage = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier) - defender.currentDefense;
+            damage = Math.Max(1, damage);
+            defender.TakeDamage(damage);
+
+            Debug.Log(
+                $"{attackerName} uses {skill.skillName} on {defenderName} for {damage} damage. " +
+                $"{defenderName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
+        }
+        else if (skill.type == SkillType.Heal)
+        {
+            int healAmount = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier);
+            int healthBefore = attacker.currentHealth;
+            attacker.Heal(healAmount);
+
+            Debug.Log(
+                $"{attackerName} uses {skill.skillName} and heals for {attacker.currentHealth - healthBefore}. " +
+                $"{attackerName} HP: {attacker.currentHealth}/{attacker.data.baseHealth}");
+        }
+        else // SkillType.Buff - no stat-modification system yet, so just announce it.
+        {
+            Debug.Log($"{attackerName} uses {skill.skillName}.");
+        }
+
+        attacker.UseSkillCooldown(skill);
+    }
 }

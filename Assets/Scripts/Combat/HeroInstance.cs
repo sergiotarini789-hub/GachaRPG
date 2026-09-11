@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 /// <summary>
 /// Plain C# class holding a hero's runtime battle state, instantiated from a
@@ -6,6 +7,8 @@ using System;
 /// tracks live values (health, attack, defense, speed) that combat effects
 /// can modify, plus an <see cref="isAlive"/> flag used by systems such as
 /// <see cref="TurnManager"/> to skip dead units.
+///
+/// Also owns the hero's skill kit and per-skill cooldown tracking.
 /// </summary>
 public class HeroInstance
 {
@@ -27,9 +30,16 @@ public class HeroInstance
     /// <summary>Whether the hero is still alive and able to take turns.</summary>
     public bool isAlive;
 
+    /// <summary>Skills this hero can use in battle. Populate at spawn time from the hero's kit.</summary>
+    public List<SkillData> skills;
+
+    /// <summary>Turns remaining before each tracked skill is usable again. Skills not in the map are ready.</summary>
+    private Dictionary<SkillData, int> cooldownTracker;
+
     /// <summary>
     /// Creates a battle-ready instance from a hero template: all current stats
-    /// start at the template's base values and the hero starts alive.
+    /// start at the template's base values and the hero starts alive with an
+    /// empty skill kit and all skills ready.
     /// </summary>
     /// <param name="sourceData">The <see cref="HeroData"/> asset to instantiate.</param>
     public HeroInstance(HeroData sourceData)
@@ -40,6 +50,8 @@ public class HeroInstance
         currentDefense = sourceData.baseDefense;
         currentSpeed = sourceData.baseSpeed;
         isAlive = true;
+        skills = new List<SkillData>();
+        cooldownTracker = new Dictionary<SkillData, int>();
     }
 
     /// <summary>
@@ -65,5 +77,39 @@ public class HeroInstance
     public void Heal(int amount)
     {
         currentHealth = Math.Min(data.baseHealth, currentHealth + amount);
+    }
+
+    /// <summary>
+    /// Whether the skill can be used right now. True unless the skill is
+    /// still cooling down; skills with cooldown 0 are ready every turn.
+    /// </summary>
+    /// <param name="skill">The skill to check.</param>
+    /// <returns>True if the skill is off cooldown.</returns>
+    public bool IsSkillReady(SkillData skill)
+    {
+        return !cooldownTracker.TryGetValue(skill, out int turnsRemaining) || turnsRemaining <= 0;
+    }
+
+    /// <summary>
+    /// Puts the skill on cooldown for its configured number of turns.
+    /// </summary>
+    /// <param name="skill">The skill that was just used.</param>
+    public void UseSkillCooldown(SkillData skill)
+    {
+        cooldownTracker[skill] = skill.cooldown;
+    }
+
+    /// <summary>
+    /// Reduces every tracked cooldown by one turn, floored at 0. Call at the
+    /// start of this hero's turn so its cooldowns recover while it acts.
+    /// </summary>
+    public void TickCooldowns()
+    {
+        // Copy the keys so the dictionary is never modified while enumerated.
+        List<SkillData> tracked = new List<SkillData>(cooldownTracker.Keys);
+        foreach (SkillData skill in tracked)
+        {
+            cooldownTracker[skill] = Math.Max(0, cooldownTracker[skill] - 1);
+        }
     }
 }
