@@ -10,11 +10,11 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e295c3a1099444a481008d1fe2f2db68, type: 3}
-  m_Name: Heal
+  m_Name: TempestEdge
   m_EditorClassIdentifier: 
-  skillName: Heal
-  type: 1
-  target: 2
-  damageMultiplier: 1.5
+  skillName: Tempest Edge
+  type: 0
+  target: 0
+  damageMultiplier: 2
   cooldown: 2
-  description: Restores health to the first living ally other than the user. Scales with 150 percent of attack.
+  description: Hurls a storm-charged blade at the first living enemy for 200 percent of attack as damage.

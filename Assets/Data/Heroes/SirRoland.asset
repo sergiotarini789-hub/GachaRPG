@@ -10,15 +10,23 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9e7e615042e7436d8332a8f78aeb64fa, type: 3}
-  m_Name: Tank
+  m_Name: SirRoland
   m_EditorClassIdentifier: 
-  heroName: Tank
-  rarity: 0
-  baseHealth: 160
+  heroId: sir_roland
+  heroName: Sir Roland
+  rarity: 1
+  role: 1
+  baseHealth: 165
   baseAttack: 12
-  baseDefense: 12
+  baseDefense: 13
   baseSpeed: 6
   icon: {fileID: 0}
-  description: Defensive frontliner. Very high health and defense with lower speed. Uses Shield Bash for moderate damage.
+  description: An oathbound knight who anchors the line. Exceptional health and defense let him absorb the enemy's opening assault while his allies work.
+  growth:
+    maxLevel: 50
+    healthPerLevel: 14
+    attackPerLevel: 1
+    defensePerLevel: 1.4
+    speedPerLevel: 0.1
   skills:
   - {fileID: 11400000, guid: b3e59f7f2561453090d8ca318ee67074, type: 2}

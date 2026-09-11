@@ -10,15 +10,23 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9e7e615042e7436d8332a8f78aeb64fa, type: 3}
-  m_Name: Healer
+  m_Name: LyraLightweaver
   m_EditorClassIdentifier: 
-  heroName: Healer
-  rarity: 0
+  heroId: lyra
+  heroName: Lyra Lightweaver
+  rarity: 1
+  role: 2
   baseHealth: 90
-  baseAttack: 10
+  baseAttack: 11
   baseDefense: 5
   baseSpeed: 11
   icon: {fileID: 0}
-  description: Support hero. Keeps allies alive by healing the first living ally other than the user.
+  description: A wandering lightweaver. The fastest hero on the field and the most fragile - she keeps the front line standing with Mending Light.
+  growth:
+    maxLevel: 50
+    healthPerLevel: 9
+    attackPerLevel: 1.2
+    defensePerLevel: 0.5
+    speedPerLevel: 0.2
   skills:
   - {fileID: 11400000, guid: f90d91f15aa74f26bf775b5a3dcabf21, type: 2}

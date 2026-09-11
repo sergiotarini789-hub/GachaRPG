@@ -1,11 +1,12 @@
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 /// <summary>
-/// Scene test harness: attach to a GameObject and assign the Warrior / Tank /
-/// Healer HeroData assets in the Inspector (or the legacy two HeroData fields
-/// for a mirrored 3v3). Press Play
+/// Scene test harness: attach to a GameObject and assign the three prototype
+/// hero assets (attack / defense / support) in the Inspector (or the legacy
+/// two HeroData fields for a mirrored 3v3). Press Play
 /// to run a deterministic 3v3 battle: three HeroInstances per team, turn
 /// order by highest current Speed each round, first ready skill preferred
 /// over the basic attack, first living enemy targeted (heals target self).
@@ -30,14 +31,17 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     public SkillData testHealSkill;
 
-    /// <summary>Warrior HeroData (DPS) for the archetype 3v3 (assign in the Inspector).</summary>
-    public HeroData warriorData;
+    /// <summary>Attack-role hero for the prototype 3v3 (assign in the Inspector).</summary>
+    [FormerlySerializedAs("warriorData")]
+    public HeroData attackHeroData;
 
-    /// <summary>Tank HeroData (defensive frontliner) for the archetype 3v3 (assign in the Inspector).</summary>
-    public HeroData tankData;
+    /// <summary>Defense-role hero for the prototype 3v3 (assign in the Inspector).</summary>
+    [FormerlySerializedAs("tankData")]
+    public HeroData defenseHeroData;
 
-    /// <summary>Healer HeroData (support) for the archetype 3v3 (assign in the Inspector).</summary>
-    public HeroData healerData;
+    /// <summary>Support-role hero for the prototype 3v3 (assign in the Inspector).</summary>
+    [FormerlySerializedAs("healerData")]
+    public HeroData supportHeroData;
 
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
@@ -240,8 +244,8 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     public IEnumerator RunTeamBattleRoutine()
     {
-        bool archetypeKit = warriorData != null && tankData != null && healerData != null;
-        if (!archetypeKit && (hero1Data == null || hero2Data == null))
+        bool heroKit = attackHeroData != null && defenseHeroData != null && supportHeroData != null;
+        if (!heroKit && (hero1Data == null || hero2Data == null))
         {
             Debug.LogWarning("BattleTestRunner: assign both HeroData assets in the Inspector before starting the battle.");
             battleEnded = true;
@@ -249,11 +253,12 @@ public class BattleTestRunner : MonoBehaviour
             yield break;
         }
 
-        if (archetypeKit)
+        if (heroKit)
         {
-            // Archetype battle: Team 1 and Team 2 each field Warrior + Tank + Healer.
-            team1 = BuildMixedTeam(warriorData, tankData, healerData, prefix: string.Empty);
-            team2 = BuildMixedTeam(warriorData, tankData, healerData, prefix: "Enemy ");
+            // Prototype battle: both teams field the same three named heroes,
+            // one per role; slot order is set inside BuildMixedTeam.
+            team1 = BuildMixedTeam(attackHeroData, defenseHeroData, supportHeroData, prefix: string.Empty);
+            team2 = BuildMixedTeam(attackHeroData, defenseHeroData, supportHeroData, prefix: "Enemy ");
         }
         else
         {
@@ -318,7 +323,7 @@ public class BattleTestRunner : MonoBehaviour
 
     /// <summary>
     /// Builds a team of three independent HeroInstances from one HeroData
-    /// template, labeling each instance ("Warrior 1", "Enemy Warrior 2", ...)
+    /// template, labeling each instance ("Hero 1", "Enemy Hero 2", ...)
     /// so look-alike heroes stay readable in logs and the HUD.
     /// </summary>
     private static Team BuildTeam(HeroData template, string prefix)
@@ -335,25 +340,24 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds an archetype team of one Warrior, one Tank, and one Healer.
-    /// Labels are plain ("Warrior", "Enemy Tank", ...) since the three
-    /// archetypes are distinct within a team.
+    /// Builds a prototype team from three hero templates, one per role.
+    /// Labels are the heroes' own data names with the team prefix.
     ///
     /// Slot order is deliberate fixture configuration: combat always hits
-    /// the first living enemy, so the Tank leads and absorbs the early
-    /// focus, the Healer follows (its heals land on the damaged Tank), and
-    /// the Warrior - the only archetype whose damage breaks tank defense -
-    /// closes the fight. A Warrior-first lineup got both Warriors killed
-    /// immediately, leaving an unkillable Tank+Healer mirror (about 5
-    /// damage per two rounds against 15 healing), so that fixture could
-    /// never reach a real winner.
+    /// the first living enemy, so the defense hero leads and absorbs the
+    /// early focus, the support hero follows (its heals land on the damaged
+    /// frontliner), and the attack hero - the only one whose damage breaks
+    /// tanky defense - closes the fight. An attack-hero-first lineup gets
+    /// both attackers killed immediately, leaving an unkillable tanky
+    /// mirror (a few points of damage per two rounds against double-digit
+    /// healing), so the fixture could never reach a real winner.
     /// </summary>
-    private static Team BuildMixedTeam(HeroData warrior, HeroData tank, HeroData healer, string prefix)
+    private static Team BuildMixedTeam(HeroData attack, HeroData defense, HeroData support, string prefix)
     {
         var team = new Team();
-        AddLabeled(team, tank, prefix);
-        AddLabeled(team, healer, prefix);
-        AddLabeled(team, warrior, prefix);
+        AddLabeled(team, defense, prefix);
+        AddLabeled(team, support, prefix);
+        AddLabeled(team, attack, prefix);
         return team;
     }
 

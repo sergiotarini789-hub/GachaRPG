@@ -32,7 +32,7 @@ public class HeroInstance
 
     /// <summary>
     /// Runtime label for logs and UI. Defaults to the template's heroName;
-    /// the test harness relabels look-alike heroes (e.g. "Warrior 2") so
+    /// the test harness relabels look-alike heroes (e.g. "Hero 2") so
     /// battle logs stay readable.
     /// </summary>
     public string displayName;

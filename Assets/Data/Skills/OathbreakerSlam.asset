@@ -10,11 +10,11 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: e295c3a1099444a481008d1fe2f2db68, type: 3}
-  m_Name: ShieldBash
+  m_Name: OathbreakerSlam
   m_EditorClassIdentifier: 
-  skillName: Shield Bash
+  skillName: Oathbreaker Slam
   type: 0
   target: 0
   damageMultiplier: 1.25
   cooldown: 2
-  description: A bash dealing 125 percent of attack as damage. Deeper defensive utility comes later.
+  description: Slams the first living enemy with his shattered oath-shield for 125 percent of attack as damage.

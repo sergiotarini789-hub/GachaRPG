@@ -10,15 +10,23 @@ MonoBehaviour:
   m_Enabled: 1
   m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 9e7e615042e7436d8332a8f78aeb64fa, type: 3}
-  m_Name: Warrior
+  m_Name: KaelStormblade
   m_EditorClassIdentifier: 
-  heroName: Warrior
-  rarity: 0
-  baseHealth: 100
-  baseAttack: 20
-  baseDefense: 5
+  heroId: kael
+  heroName: Kael Stormblade
+  rarity: 2
+  role: 0
+  baseHealth: 95
+  baseAttack: 22
+  baseDefense: 4
   baseSpeed: 10
   icon: {fileID: 0}
-  description: Frontline damage dealer. High attack and solid speed. Uses Power Strike for burst damage.
+  description: A storm-forged duelist who trades armor for overwhelming offence. Fragile but fast, and Tempest Edge carves through enemy frontlines.
+  growth:
+    maxLevel: 60
+    healthPerLevel: 8
+    attackPerLevel: 2.4
+    defensePerLevel: 0.4
+    speedPerLevel: 0.15
   skills:
   - {fileID: 11400000, guid: c2ebed73a23648f3b48895460341c275, type: 2}
