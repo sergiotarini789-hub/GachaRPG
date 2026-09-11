@@ -33,8 +33,8 @@ public static class CombatManager
         defender.TakeDamage(damage);
 
         Debug.Log(
-            $"{attacker.data.heroName} attacks {defender.data.heroName} for {damage} damage. " +
-            $"{defender.data.heroName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
+            $"{attacker.displayName} attacks {defender.displayName} for {damage} damage. " +
+            $"{defender.displayName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
     }
 
     /// <summary>
