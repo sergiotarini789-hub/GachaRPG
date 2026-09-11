@@ -338,13 +338,22 @@ public class BattleTestRunner : MonoBehaviour
     /// Builds an archetype team of one Warrior, one Tank, and one Healer.
     /// Labels are plain ("Warrior", "Enemy Tank", ...) since the three
     /// archetypes are distinct within a team.
+    ///
+    /// Slot order is deliberate fixture configuration: combat always hits
+    /// the first living enemy, so the Tank leads and absorbs the early
+    /// focus, the Healer follows (its heals land on the damaged Tank), and
+    /// the Warrior - the only archetype whose damage breaks tank defense -
+    /// closes the fight. A Warrior-first lineup got both Warriors killed
+    /// immediately, leaving an unkillable Tank+Healer mirror (about 5
+    /// damage per two rounds against 15 healing), so that fixture could
+    /// never reach a real winner.
     /// </summary>
     private static Team BuildMixedTeam(HeroData warrior, HeroData tank, HeroData healer, string prefix)
     {
         var team = new Team();
-        AddLabeled(team, warrior, prefix);
         AddLabeled(team, tank, prefix);
         AddLabeled(team, healer, prefix);
+        AddLabeled(team, warrior, prefix);
         return team;
     }
 
