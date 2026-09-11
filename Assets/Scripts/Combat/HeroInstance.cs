@@ -38,8 +38,8 @@ public class HeroInstance
 
     /// <summary>
     /// Creates a battle-ready instance from a hero template: all current stats
-    /// start at the template's base values and the hero starts alive with an
-    /// empty skill kit and all skills ready.
+    /// start at the template's base values, the hero starts alive with its own
+    /// copy of the template's skill kit, and all skills are ready.
     /// </summary>
     /// <param name="sourceData">The <see cref="HeroData"/> asset to instantiate.</param>
     public HeroInstance(HeroData sourceData)
@@ -50,7 +50,13 @@ public class HeroInstance
         currentDefense = sourceData.baseDefense;
         currentSpeed = sourceData.baseSpeed;
         isAlive = true;
-        skills = new List<SkillData>();
+
+        // Copy the kit so runtime cooldown tracking never mutates the shared
+        // HeroData asset (or another hero built from the same template).
+        skills = sourceData.skills != null
+            ? new List<SkillData>(sourceData.skills)
+            : new List<SkillData>();
+
         cooldownTracker = new Dictionary<SkillData, int>();
     }
 
