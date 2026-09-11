@@ -38,39 +38,67 @@ public static class CombatManager
     }
 
     /// <summary>
-    /// Resolves one skill use, scaling with the attacker's currentAttack:
-    /// Damage skills hit the defender for (attack x multiplier - defense,
-    /// minimum 1); Heal skills restore the attacker's own health (capped at
-    /// base health). Puts the skill on cooldown at the end. Readiness should
-    /// be checked first via <see cref="HeroInstance.IsSkillReady"/>.
+    /// Resolves one skill use, scaling with the attacker's currentAttack and
+    /// applying the skill's effect (SkillType) to the resolved target:
+    /// Damage skills hit the target for (attack x multiplier - defense,
+    /// minimum 1); Heal skills restore the target's health (capped at the
+    /// target's base health - pass the attacker itself for self-heals);
+    /// Buff is a placeholder announcement. Puts the skill on cooldown at the
+    /// end; a skill with no valid target fails safely instead (no effect, no
+    /// cooldown). Target selection (enemy/self/ally) is the caller's job -
+    /// see SkillTarget and TeamBattle.
     /// </summary>
     /// <param name="attacker">The unit using the skill.</param>
-    /// <param name="defender">The opposing unit (target of damage skills).</param>
+    /// <param name="target">The hero the skill is aimed at.</param>
     /// <param name="skill">The skill being used.</param>
-    public static void PerformSkill(HeroInstance attacker, HeroInstance defender, SkillData skill)
+    public static void PerformSkill(HeroInstance attacker, HeroInstance target, SkillData skill)
     {
         string attackerName = attacker.displayName;
-        string defenderName = defender.displayName;
 
         if (skill.type == SkillType.Damage)
         {
-            int damage = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier) - defender.currentDefense;
+            if (target == null || !target.isAlive)
+            {
+                Debug.LogWarning($"{attackerName} fails to use {skill.skillName}: no valid target.");
+                return;
+            }
+
+            string targetName = target.displayName;
+            int damage = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier) - target.currentDefense;
             damage = Math.Max(1, damage);
-            defender.TakeDamage(damage);
+            target.TakeDamage(damage);
 
             Debug.Log(
-                $"{attackerName} uses {skill.skillName} on {defenderName} for {damage} damage. " +
-                $"{defenderName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
+                $"{attackerName} uses {skill.skillName} on {targetName} for {damage} damage. " +
+                $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
         }
         else if (skill.type == SkillType.Heal)
         {
-            int healAmount = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier);
-            int healthBefore = attacker.currentHealth;
-            attacker.Heal(healAmount);
+            if (target == null || !target.isAlive)
+            {
+                Debug.LogWarning($"{attackerName} fails to use {skill.skillName}: no valid heal target.");
+                return;
+            }
 
-            Debug.Log(
-                $"{attackerName} uses {skill.skillName} and heals for {attacker.currentHealth - healthBefore}. " +
-                $"{attackerName} HP: {attacker.currentHealth}/{attacker.data.baseHealth}");
+            string targetName = target.displayName;
+            int healAmount = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier);
+            int healthBefore = target.currentHealth;
+            target.Heal(healAmount);
+
+            // Self-heals keep the original log format; healing someone else
+            // names the recipient.
+            if (ReferenceEquals(target, attacker))
+            {
+                Debug.Log(
+                    $"{attackerName} uses {skill.skillName} and heals for {target.currentHealth - healthBefore}. " +
+                    $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
+            }
+            else
+            {
+                Debug.Log(
+                    $"{attackerName} uses {skill.skillName} and heals {targetName} for {target.currentHealth - healthBefore}. " +
+                    $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
+            }
         }
         else // SkillType.Buff - no stat-modification system yet, so just announce it.
         {

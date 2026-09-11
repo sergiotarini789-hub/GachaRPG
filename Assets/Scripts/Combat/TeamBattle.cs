@@ -11,9 +11,14 @@ using System.Linq;
 /// that order; heroes who die mid-round are skipped and never act again.
 /// When the round ends a new one is built from the survivors.
 ///
-/// Targeting: damage skills and basic attacks hit the first living enemy;
-/// heal skills target the acting hero. Victory: a team wins when every
-/// enemy hero is dead; a safety turn cap ends endless battles as a draw.
+/// Targeting: the acting hero's first ready skill is preferred over the
+/// basic attack, and its <see cref="SkillData.target"/> is resolved to a
+/// concrete hero - Enemy: first living enemy; Self: the acting hero; Ally:
+/// the first living ally other than the actor (if none exists the skill
+/// fails safely: no effect, no cooldown consumed, turn spent). Basic
+/// attacks always hit the first living enemy. Victory: a team wins when
+/// every enemy hero is dead; a safety turn cap ends endless battles as a
+/// draw.
 /// </summary>
 public class TeamBattle
 {
@@ -74,9 +79,10 @@ public class TeamBattle
 
     /// <summary>
     /// Resolves the acting hero's turn: cooldowns tick, then the hero uses
-    /// its first ready skill (heals target self, other skills target the
-    /// first living enemy) or falls back to a basic attack. Returns a human
-    /// readable battle-event line for UI logs, or null when nothing happened.
+    /// its first ready skill - target resolved from the skill's SkillTarget -
+    /// or falls back to a basic attack on the first living enemy. Returns a
+    /// human readable battle-event line for UI logs, or null when nothing
+    /// happened.
     /// </summary>
     public string PerformTurn(HeroInstance actor)
     {
@@ -90,8 +96,8 @@ public class TeamBattle
 
         Team allies = team1.Contains(actor) ? team1 : team2;
         Team enemies = ReferenceEquals(allies, team1) ? team2 : team1;
-        HeroInstance target = enemies.FirstAlive();
-        if (target == null)
+        HeroInstance enemyTarget = enemies.FirstAlive();
+        if (enemyTarget == null)
         {
             // Nothing left to fight; treat as an ended battle.
             Finish(allies);
@@ -109,38 +115,69 @@ public class TeamBattle
             }
         }
 
-        if (readySkill != null && readySkill.type == SkillType.Heal)
+        if (readySkill != null)
         {
-            // Heal skills target the acting hero for now.
-            int healthBefore = actor.currentHealth;
-            CombatManager.PerformSkill(actor, actor, readySkill);
-            message =
-                $"{actor.displayName} uses {readySkill.skillName} and recovers " +
-                $"{actor.currentHealth - healthBefore} HP ({actor.currentHealth}/{actor.data.baseHealth})";
-        }
-        else if (readySkill != null && readySkill.type == SkillType.Buff)
-        {
-            // No buff system yet; announce it and move on.
-            CombatManager.PerformSkill(actor, target, readySkill);
-            message = $"{actor.displayName} uses {readySkill.skillName}";
-        }
-        else if (readySkill != null)
-        {
-            int healthBefore = target.currentHealth;
-            CombatManager.PerformSkill(actor, target, readySkill);
-            message =
-                $"{actor.displayName} uses {readySkill.skillName} on {target.displayName} " +
-                $"for {healthBefore - target.currentHealth} damage " +
-                $"({target.displayName} HP: {target.currentHealth}/{target.data.baseHealth})";
+            // Resolve the skill's intended target to a concrete hero.
+            HeroInstance skillTarget;
+            switch (readySkill.target)
+            {
+                case SkillTarget.Self:
+                    skillTarget = actor;
+                    break;
+                case SkillTarget.Ally:
+                    skillTarget = allies.LivingMembers().FirstOrDefault(member => !ReferenceEquals(member, actor));
+                    break;
+                default: // SkillTarget.Enemy
+                    skillTarget = enemyTarget;
+                    break;
+            }
+
+            if (skillTarget == null)
+            {
+                // Fail safely: the skill fizzles - no effect, no cooldown
+                // consumed - but the turn is spent so the battle moves on.
+                turnsTaken++;
+                if (turnsTaken >= MaxTurns)
+                {
+                    BattleOver = true;
+                    Winner = null;
+                }
+
+                return $"{actor.displayName} finds no valid target for {readySkill.skillName}";
+            }
+
+            int healthBefore = skillTarget.currentHealth;
+            CombatManager.PerformSkill(actor, skillTarget, readySkill);
+
+            if (readySkill.type == SkillType.Heal)
+            {
+                int healed = skillTarget.currentHealth - healthBefore;
+                message = ReferenceEquals(skillTarget, actor)
+                    ? $"{actor.displayName} uses {readySkill.skillName} and recovers {healed} HP " +
+                      $"({skillTarget.currentHealth}/{skillTarget.data.baseHealth})"
+                    : $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} and recovers {healed} HP " +
+                      $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.data.baseHealth})";
+            }
+            else if (readySkill.type == SkillType.Buff)
+            {
+                message = $"{actor.displayName} uses {readySkill.skillName}";
+            }
+            else
+            {
+                message =
+                    $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} " +
+                    $"for {healthBefore - skillTarget.currentHealth} damage " +
+                    $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.data.baseHealth})";
+            }
         }
         else
         {
-            int healthBefore = target.currentHealth;
-            CombatManager.PerformAttack(actor, target);
+            int healthBefore = enemyTarget.currentHealth;
+            CombatManager.PerformAttack(actor, enemyTarget);
             message =
-                $"{actor.displayName} attacks {target.displayName} " +
-                $"for {healthBefore - target.currentHealth} damage " +
-                $"({target.displayName} HP: {target.currentHealth}/{target.data.baseHealth})";
+                $"{actor.displayName} attacks {enemyTarget.displayName} " +
+                $"for {healthBefore - enemyTarget.currentHealth} damage " +
+                $"({enemyTarget.displayName} HP: {enemyTarget.currentHealth}/{enemyTarget.data.baseHealth})";
         }
 
         turnsTaken++;

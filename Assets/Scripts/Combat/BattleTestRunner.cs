@@ -22,6 +22,12 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Team 2's HeroData template - each slot spawns its own HeroInstance (assign in the Inspector).</summary>
     public HeroData hero2Data;
 
+    /// <summary>
+    /// Optional test skill granted to every Team 2 hero to demonstrate skill
+    /// targeting (e.g. a heal). Leave unassigned for the default battle.
+    /// </summary>
+    public SkillData testHealSkill;
+
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
 
@@ -139,7 +145,7 @@ public class BattleTestRunner : MonoBehaviour
                 if (readySkill.type == SkillType.Heal)
                 {
                     int healthBefore = actor.currentHealth;
-                    CombatManager.PerformSkill(actor, target, readySkill);
+                    CombatManager.PerformSkill(actor, actor, readySkill); // heals target self for now
                     AddBattleEvent(
                         $"{actor.data.heroName} uses {readySkill.skillName} and recovers " +
                         $"{actor.currentHealth - healthBefore} HP ({actor.currentHealth}/{actor.data.baseHealth})");
@@ -204,6 +210,14 @@ public class BattleTestRunner : MonoBehaviour
 
         team1 = BuildTeam(hero1Data, prefix: string.Empty);
         team2 = BuildTeam(hero2Data, prefix: "Enemy ");
+        if (testHealSkill != null)
+        {
+            foreach (HeroInstance member in team2.Members)
+            {
+                member.skills.Add(testHealSkill);
+            }
+        }
+
         teamBattle = new TeamBattle(team1, team2);
         battleLog.Clear();
         battleEnded = false;
