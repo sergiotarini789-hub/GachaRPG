@@ -111,6 +111,13 @@ public class BattleHud : MonoBehaviour
     /// <summary>Unity's built-in legacy font (Arial.ttf no longer ships with Unity 6).</summary>
     private Font font;
 
+    /// <summary>
+    /// Shared plain-white sprite for every health-bar fill. A Filled Image
+    /// only applies its fillAmount when it has a sprite; a sprite-less Image
+    /// falls back to a plain full quad, which is why the bars never shrank.
+    /// </summary>
+    private Sprite fillSprite;
+
     /// <summary>Rows currently shown on the left side (team 1, or the 1v1 hero).</summary>
     private readonly List<HeroRow> leftRows = new List<HeroRow>();
 
@@ -171,6 +178,13 @@ public class BattleHud : MonoBehaviour
         // (Arial.ttf was removed from the engine in Unity 2022.2+).
         font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
 
+        // Image.type = Filled only honors fillAmount when the Image has a
+        // sprite - without one, Image.OnPopulateMesh falls back to a plain
+        // full quad and every bar renders 100% full regardless of health.
+        // One shared white sprite (from Unity's built-in white texture) is
+        // all a solid-color fill needs; each Image tints it with its color.
+        fillSprite = Sprite.Create(Texture2D.whiteTexture, new Rect(0f, 0f, 4f, 4f), new Vector2(0.5f, 0.5f), 100f);
+
         Canvas canvas = gameObject.AddComponent<Canvas>();
         canvas.renderMode = RenderMode.ScreenSpaceOverlay;
 
@@ -188,6 +202,19 @@ public class BattleHud : MonoBehaviour
 
         BuildLogPanel(root);
         BuildResultBanner(root);
+    }
+
+    /// <summary>
+    /// Frees the runtime-created sprite. Sprites are not components, so one
+    /// created with <see cref="Sprite.Create"/> does not die with the
+    /// GameObject and would leak without an explicit Destroy.
+    /// </summary>
+    private void OnDestroy()
+    {
+        if (fillSprite != null)
+        {
+            Destroy(fillSprite);
+        }
     }
 
     /// <summary>Reads the runner's current state and updates only what changed since the last frame.</summary>
@@ -537,6 +564,9 @@ public class BattleHud : MonoBehaviour
             fill.offsetMin = new Vector2(3f, 3f);
             fill.offsetMax = new Vector2(-3f, -3f);
             fillImage = fill.gameObject.AddComponent<Image>();
+            // The shared white sprite is what makes Filled rendering work:
+            // a sprite-less Image draws a full quad and ignores fillAmount.
+            fillImage.sprite = hud.fillSprite;
             fillImage.color = BarFillColor;
             fillImage.type = Image.Type.Filled;
             fillImage.fillMethod = Image.FillMethod.Horizontal;
