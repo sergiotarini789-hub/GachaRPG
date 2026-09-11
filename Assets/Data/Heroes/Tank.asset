@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9e7e615042e7436d8332a8f78aeb64fa, type: 3}
+  m_Name: Tank
+  m_EditorClassIdentifier: 
+  heroName: Tank
+  rarity: 0
+  baseHealth: 160
+  baseAttack: 12
+  baseDefense: 12
+  baseSpeed: 6
+  icon: {fileID: 0}
+  description: Defensive frontliner. Very high health and defense with lower speed. Uses Shield Bash for moderate damage.
+  skills:
+  - {fileID: 11400000, guid: b3e59f7f2561453090d8ca318ee67074, type: 2}

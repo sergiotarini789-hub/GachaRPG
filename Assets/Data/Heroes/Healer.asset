@@ -1,0 +1,24 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9e7e615042e7436d8332a8f78aeb64fa, type: 3}
+  m_Name: Healer
+  m_EditorClassIdentifier: 
+  heroName: Healer
+  rarity: 0
+  baseHealth: 90
+  baseAttack: 10
+  baseDefense: 5
+  baseSpeed: 11
+  icon: {fileID: 0}
+  description: Support hero. Keeps allies alive by healing the first living ally other than the user.
+  skills:
+  - {fileID: 11400000, guid: f90d91f15aa74f26bf775b5a3dcabf21, type: 2}

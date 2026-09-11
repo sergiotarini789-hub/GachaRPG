@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
-/// Scene test harness: attach to a GameObject and assign two HeroData assets
-/// in the Inspector (the same asset is fine for all six heroes). Press Play
+/// Scene test harness: attach to a GameObject and assign the Warrior / Tank /
+/// Healer HeroData assets in the Inspector (or the legacy two HeroData fields
+/// for a mirrored 3v3). Press Play
 /// to run a deterministic 3v3 battle: three HeroInstances per team, turn
 /// order by highest current Speed each round, first ready skill preferred
 /// over the basic attack, first living enemy targeted (heals target self).
@@ -27,6 +28,15 @@ public class BattleTestRunner : MonoBehaviour
     /// targeting (e.g. a heal). Leave unassigned for the default battle.
     /// </summary>
     public SkillData testHealSkill;
+
+    /// <summary>Warrior HeroData (DPS) for the archetype 3v3 (assign in the Inspector).</summary>
+    public HeroData warriorData;
+
+    /// <summary>Tank HeroData (defensive frontliner) for the archetype 3v3 (assign in the Inspector).</summary>
+    public HeroData tankData;
+
+    /// <summary>Healer HeroData (support) for the archetype 3v3 (assign in the Inspector).</summary>
+    public HeroData healerData;
 
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
@@ -200,7 +210,8 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     public IEnumerator RunTeamBattleRoutine()
     {
-        if (hero1Data == null || hero2Data == null)
+        bool archetypeKit = warriorData != null && tankData != null && healerData != null;
+        if (!archetypeKit && (hero1Data == null || hero2Data == null))
         {
             Debug.LogWarning("BattleTestRunner: assign both HeroData assets in the Inspector before starting the battle.");
             battleEnded = true;
@@ -208,13 +219,23 @@ public class BattleTestRunner : MonoBehaviour
             yield break;
         }
 
-        team1 = BuildTeam(hero1Data, prefix: string.Empty);
-        team2 = BuildTeam(hero2Data, prefix: "Enemy ");
-        if (testHealSkill != null)
+        if (archetypeKit)
         {
-            foreach (HeroInstance member in team2.Members)
+            // Archetype battle: Team 1 and Team 2 each field Warrior + Tank + Healer.
+            team1 = BuildMixedTeam(warriorData, tankData, healerData, prefix: string.Empty);
+            team2 = BuildMixedTeam(warriorData, tankData, healerData, prefix: "Enemy ");
+        }
+        else
+        {
+            // Legacy mirrored 3v3 kept as a test fixture.
+            team1 = BuildTeam(hero1Data, prefix: string.Empty);
+            team2 = BuildTeam(hero2Data, prefix: "Enemy ");
+            if (testHealSkill != null)
             {
-                member.skills.Add(testHealSkill);
+                foreach (HeroInstance member in team2.Members)
+                {
+                    member.skills.Add(testHealSkill);
+                }
             }
         }
 
@@ -281,6 +302,28 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         return team;
+    }
+
+    /// <summary>
+    /// Builds an archetype team of one Warrior, one Tank, and one Healer.
+    /// Labels are plain ("Warrior", "Enemy Tank", ...) since the three
+    /// archetypes are distinct within a team.
+    /// </summary>
+    private static Team BuildMixedTeam(HeroData warrior, HeroData tank, HeroData healer, string prefix)
+    {
+        var team = new Team();
+        AddLabeled(team, warrior, prefix);
+        AddLabeled(team, tank, prefix);
+        AddLabeled(team, healer, prefix);
+        return team;
+    }
+
+    /// <summary>Creates one HeroInstance from the template and labels it for the logs.</summary>
+    private static void AddLabeled(Team team, HeroData template, string prefix)
+    {
+        var hero = new HeroInstance(template);
+        hero.displayName = $"{prefix}{template.heroName}";
+        team.Add(hero);
     }
 
     /// <summary>Records a battle event, most recent first, keeping only the last five.</summary>
