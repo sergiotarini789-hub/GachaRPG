@@ -70,9 +70,13 @@ public class TurnManager
             return lastAlive;
         }
 
-        // Tick the speed bar until someone's gauge reaches the threshold.
+        // Tick the speed bar until a unit can act.
         while (true)
         {
+            // Each tick, EVERY alive unit's gauge grows by its current speed.
+            // Incrementing everyone before checking keeps turn distribution
+            // proportional to speed (a unit earlier in the list crossing the
+            // threshold does not rob later units of their tick).
             foreach (HeroInstance unit in allUnits)
             {
                 // Dead units never gain gauge and are skipped entirely.
@@ -82,6 +86,15 @@ public class TurnManager
                 }
 
                 turnGauge[unit] += unit.currentSpeed;
+            }
+
+            // The first unit (in list order) that reached the threshold acts.
+            foreach (HeroInstance unit in allUnits)
+            {
+                if (!unit.isAlive)
+                {
+                    continue;
+                }
 
                 if (turnGauge[unit] >= TURN_THRESHOLD)
                 {
