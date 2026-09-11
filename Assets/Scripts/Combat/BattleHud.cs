@@ -15,7 +15,11 @@ using UnityEngine.UI;
 ///   text), with names right-aligned on the right team like the old HUD;
 /// - a bottom-center log panel with the
 ///   <see cref="BattleTestRunner.MaxLogEntries"/> most recent battle events;
-/// - a large centered victory banner, hidden until the battle ends.
+/// - a large centered result banner, hidden until the battle ends:
+///   "Victory!" when team 1 wins, "Defeat!" when team 2 wins, "Draw!"
+///   when nobody does;
+/// - dimmed rows for fallen heroes, so a dead hero never reads as still
+///   fighting.
 ///
 /// This is a pure view layer: every <see cref="Update"/> it only READS the
 /// runner's public state (teams, heroes' health, the battle log, the end
@@ -48,6 +52,12 @@ public class BattleHud : MonoBehaviour
 
     /// <summary>Translucent band behind the end-of-battle banner text.</summary>
     private static readonly Color BannerBandColor = new Color(0f, 0f, 0f, 0.65f);
+
+    /// <summary>Result banner text color when the player's side (team 1) wins.</summary>
+    private static readonly Color VictoryColor = new Color(0.36f, 0.9f, 0.45f);
+
+    /// <summary>Result banner text color when the enemy side (team 2) wins.</summary>
+    private static readonly Color DefeatColor = new Color(0.95f, 0.3f, 0.3f);
 
     /// <summary>Top-left anchor point, shared by most child rects.</summary>
     private static readonly Vector2 TopLeft = new Vector2(0f, 1f);
@@ -84,6 +94,9 @@ public class BattleHud : MonoBehaviour
 
     /// <summary>Height of the horizontal result banner band.</summary>
     private const float BannerHeight = 130f;
+
+    /// <summary>Row alpha applied to fallen heroes, so their rows read clearly as inactive.</summary>
+    private const float DeadRowAlpha = 0.4f;
 
     /// <summary>Font size of a hero name.</summary>
     private const int HeroNameFontSize = 30;
@@ -156,6 +169,9 @@ public class BattleHud : MonoBehaviour
 
     /// <summary>Cached banner visibility so unchanged frames do no work.</summary>
     private bool bannerVisible;
+
+    /// <summary>Result text currently on the banner, so unchanged frames skip text updates.</summary>
+    private string cachedBannerText;
 
     /// <summary>
     /// Creates the HUD for the given runner: a new "BattleHud" GameObject
@@ -368,23 +384,61 @@ public class BattleHud : MonoBehaviour
     }
 
     /// <summary>
-    /// Shows the centered "{winner} wins!" banner once the battle has ended
-    /// (and a roster was drawn - the old HUD showed no banner when the battle
-    /// never started). Draw cases read "Nobody wins!", as before.
+    /// Shows the centered result banner once the battle has ended (and a
+    /// roster was drawn - like the old HUD, no banner when the battle never
+    /// started). The 3v3 result is read straight from the battle's winner:
+    /// team 1 (the player's side) wins = "Victory!", team 2 wins =
+    /// "Defeat!", no winner = "Draw!". The legacy 1v1 fixture keeps its
+    /// "{hero} wins!" label.
     /// </summary>
     private void RefreshBanner()
     {
         bool show = runner != null && runner.BattleEnded && leftRows.Count > 0;
-        if (show == bannerVisible)
+        if (show != bannerVisible)
+        {
+            bannerVisible = show;
+            resultBanner.SetActive(show);
+        }
+
+        if (!show)
         {
             return;
         }
 
-        bannerVisible = show;
-        resultBanner.SetActive(show);
-        if (show)
+        string text;
+        Color color;
+        if (boundTeam1 != null)
         {
-            resultText.text = runner.WinnerName + " wins!";
+            Team winner = runner.WinningTeam;
+            if (winner == null)
+            {
+                text = "Draw!";
+                color = Color.white;
+            }
+            else if (ReferenceEquals(winner, boundTeam1))
+            {
+                text = "Victory!";
+                color = VictoryColor;
+            }
+            else
+            {
+                text = "Defeat!";
+                color = DefeatColor;
+            }
+        }
+        else
+        {
+            text = runner.WinnerName + " wins!";
+            color = Color.white;
+        }
+
+        // Assign only when the result itself changed, so a stale label from a
+        // previous battle can never linger and idle frames do no work.
+        if (text != cachedBannerText)
+        {
+            cachedBannerText = text;
+            resultText.text = text;
+            resultText.color = color;
         }
     }
 
@@ -534,9 +588,14 @@ public class BattleHud : MonoBehaviour
 
         private readonly Text hpText;
 
+        /// <summary>Dims the whole row when the hero falls, so dead heroes read clearly as out of the fight.</summary>
+        private readonly CanvasGroup rowGroup;
+
         private int lastHealth = int.MinValue;
 
         private int lastMaxHealth = int.MinValue;
+
+        private bool lastAlive = true;
 
         public HeroRow(BattleHud hud, RectTransform panel, HeroInstance hero, int slot, bool rightSide)
         {
@@ -549,6 +608,9 @@ public class BattleHud : MonoBehaviour
             Root.pivot = TopLeft;
             Root.anchoredPosition = new Vector2(0f, -(PanelPadding + slot * RowStride));
             Root.sizeDelta = new Vector2(PanelWidth, RowStride);
+
+            // Dims the entire row (name, bar, HP text) at once when the hero dies.
+            rowGroup = Root.gameObject.AddComponent<CanvasGroup>();
 
             hud.CreateText(Root, "Name", hero.displayName, HeroNameFontSize, FontStyle.Bold, alignment,
                 TopLeft, TopLeft, new Vector2(PanelPadding, 0f), new Vector2(RowWidth, 44f));
@@ -579,19 +641,27 @@ public class BattleHud : MonoBehaviour
             Refresh();
         }
 
-        /// <summary>Updates the bar fill and HP text if the hero's health changed since the last frame.</summary>
+        /// <summary>
+        /// Updates the bar fill, HP text, and dead/alive look whenever the
+        /// hero's health or living state changed since the last frame.
+        /// </summary>
         public void Refresh()
         {
             int maxHealth = Hero.data != null ? Hero.data.baseHealth : 0;
-            if (Hero.currentHealth == lastHealth && maxHealth == lastMaxHealth)
+            if (Hero.currentHealth == lastHealth && maxHealth == lastMaxHealth && Hero.isAlive == lastAlive)
             {
                 return;
             }
 
             lastHealth = Hero.currentHealth;
             lastMaxHealth = maxHealth;
+            lastAlive = Hero.isAlive;
             fillImage.fillAmount = maxHealth > 0 ? Mathf.Clamp01((float)Hero.currentHealth / maxHealth) : 0f;
             hpText.text = "HP: " + Hero.currentHealth + "/" + maxHealth;
+
+            // Fallen heroes dim so their row clearly reads as dead, while the
+            // empty bar and 0 HP text show why.
+            rowGroup.alpha = Hero.isAlive ? 1f : DeadRowAlpha;
         }
     }
 }

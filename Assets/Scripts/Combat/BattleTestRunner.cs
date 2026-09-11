@@ -102,6 +102,13 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Winner shown in the end banner: "Team 1", "Team 2", or "Nobody" on a draw.</summary>
     public string WinnerName => winnerName;
 
+    /// <summary>
+    /// The 3v3 winner exactly as <see cref="TeamBattle"/> reports it (team 1
+    /// or team 2), or null on a draw or before the battle starts. Read by the
+    /// HUD's result banner; carries no logic of its own.
+    /// </summary>
+    public Team WinningTeam => teamBattle != null ? teamBattle.Winner : null;
+
     private void Start()
     {
         // The Canvas HUD builds itself entirely from code, so the scene needs
