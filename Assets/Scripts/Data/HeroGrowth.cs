@@ -1,10 +1,10 @@
 using System;
 
 /// <summary>
-/// A hero's per-level progression curve. Pure data for a future leveling
-/// system: nothing consumes it yet (combat reads <see cref="HeroData"/>'s
-/// base stats only), but every hero carries its curve so progression can
-/// be added later without re-authoring the roster.
+/// A hero's per-level progression curve, authored per hero on its
+/// <see cref="HeroData"/> asset. Consumed by
+/// <see cref="HeroInstance.CalculateCurrentStats"/> to derive a hero's
+/// stats at its current level; at level 1 the base stats apply as-is.
 /// </summary>
 [Serializable]
 public class HeroGrowth

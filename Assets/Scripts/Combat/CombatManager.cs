@@ -34,7 +34,7 @@ public static class CombatManager
 
         Debug.Log(
             $"{attacker.displayName} attacks {defender.displayName} for {damage} damage. " +
-            $"{defender.displayName} HP: {defender.currentHealth}/{defender.data.baseHealth}");
+            $"{defender.displayName} HP: {defender.currentHealth}/{defender.maxHealth}");
     }
 
     /// <summary>
@@ -42,7 +42,8 @@ public static class CombatManager
     /// applying the skill's effect (SkillType) to the resolved target:
     /// Damage skills hit the target for (attack x multiplier - defense,
     /// minimum 1); Heal skills restore the target's health (capped at the
-    /// target's base health - pass the attacker itself for self-heals);
+    /// target's current maximum health - pass the attacker itself for
+    /// self-heals);
     /// Buff is a placeholder announcement. Puts the skill on cooldown at the
     /// end; a skill with no valid target fails safely instead (no effect, no
     /// cooldown). Target selection (enemy/self/ally) is the caller's job -
@@ -70,7 +71,7 @@ public static class CombatManager
 
             Debug.Log(
                 $"{attackerName} uses {skill.skillName} on {targetName} for {damage} damage. " +
-                $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
+                $"{targetName} HP: {target.currentHealth}/{target.maxHealth}");
         }
         else if (skill.type == SkillType.Heal)
         {
@@ -91,13 +92,13 @@ public static class CombatManager
             {
                 Debug.Log(
                     $"{attackerName} uses {skill.skillName} and heals for {target.currentHealth - healthBefore}. " +
-                    $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
+                    $"{targetName} HP: {target.currentHealth}/{target.maxHealth}");
             }
             else
             {
                 Debug.Log(
                     $"{attackerName} uses {skill.skillName} and heals {targetName} for {target.currentHealth - healthBefore}. " +
-                    $"{targetName} HP: {target.currentHealth}/{target.data.baseHealth}");
+                    $"{targetName} HP: {target.currentHealth}/{target.maxHealth}");
             }
         }
         else // SkillType.Buff - no stat-modification system yet, so just announce it.

@@ -154,9 +154,9 @@ public class TeamBattle
                 int healed = skillTarget.currentHealth - healthBefore;
                 message = ReferenceEquals(skillTarget, actor)
                     ? $"{actor.displayName} uses {readySkill.skillName} and recovers {healed} HP " +
-                      $"({skillTarget.currentHealth}/{skillTarget.data.baseHealth})"
+                      $"({skillTarget.currentHealth}/{skillTarget.maxHealth})"
                     : $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} and recovers {healed} HP " +
-                      $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.data.baseHealth})";
+                      $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.maxHealth})";
             }
             else if (readySkill.type == SkillType.Buff)
             {
@@ -167,7 +167,7 @@ public class TeamBattle
                 message =
                     $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} " +
                     $"for {healthBefore - skillTarget.currentHealth} damage " +
-                    $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.data.baseHealth})";
+                    $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.maxHealth})";
             }
         }
         else
@@ -177,7 +177,7 @@ public class TeamBattle
             message =
                 $"{actor.displayName} attacks {enemyTarget.displayName} " +
                 $"for {healthBefore - enemyTarget.currentHealth} damage " +
-                $"({enemyTarget.displayName} HP: {enemyTarget.currentHealth}/{enemyTarget.data.baseHealth})";
+                $"({enemyTarget.displayName} HP: {enemyTarget.currentHealth}/{enemyTarget.maxHealth})";
         }
 
         turnsTaken++;

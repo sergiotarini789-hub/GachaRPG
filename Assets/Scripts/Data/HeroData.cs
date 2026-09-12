@@ -47,8 +47,8 @@ public class HeroData : ScriptableObject
     public string description;
 
     /// <summary>
-    /// Per-level growth curve. Pure data: the leveling system that consumes
-    /// it is a later milestone - combat currently reads the base stats only.
+    /// Per-level growth curve. Read by <see cref="HeroInstance"/>'s
+    /// progression system to calculate stats above level 1; never mutated.
     /// </summary>
     public HeroGrowth growth = new HeroGrowth();
 

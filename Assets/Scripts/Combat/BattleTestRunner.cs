@@ -43,6 +43,14 @@ public class BattleTestRunner : MonoBehaviour
     [FormerlySerializedAs("healerData")]
     public HeroData supportHeroData;
 
+    /// <summary>
+    /// Test-only progression hook: experience granted to every Team 1 hero
+    /// once the teams are built, exercising HeroInstance's progression API
+    /// (level-ups and stat growth apply automatically). Leave 0 for the
+    /// standard all-level-1 fixture.
+    /// </summary>
+    public int teamOneBonusExperience = 0;
+
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
 
@@ -192,7 +200,7 @@ public class BattleTestRunner : MonoBehaviour
                     CombatManager.PerformSkill(actor, actor, readySkill); // heals target self for now
                     AddBattleEvent(
                         $"{actor.data.heroName} uses {readySkill.skillName} and recovers " +
-                        $"{actor.currentHealth - healthBefore} HP ({actor.currentHealth}/{actor.data.baseHealth})");
+                        $"{actor.currentHealth - healthBefore} HP ({actor.currentHealth}/{actor.maxHealth})");
                 }
                 else
                 {
@@ -201,7 +209,7 @@ public class BattleTestRunner : MonoBehaviour
                     AddBattleEvent(
                         $"{actor.data.heroName} uses {readySkill.skillName} on {target.data.heroName} " +
                         $"for {healthBefore - target.currentHealth} damage " +
-                        $"({target.data.heroName} HP: {target.currentHealth}/{target.data.baseHealth})");
+                        $"({target.data.heroName} HP: {target.currentHealth}/{target.maxHealth})");
                 }
             }
             else
@@ -210,7 +218,7 @@ public class BattleTestRunner : MonoBehaviour
                 CombatManager.PerformAttack(actor, target);
                 AddBattleEvent(
                     $"{actor.data.heroName} attacks {target.data.heroName} for {damage} damage " +
-                    $"({target.data.heroName} HP: {target.currentHealth}/{target.data.baseHealth})");
+                    $"({target.data.heroName} HP: {target.currentHealth}/{target.maxHealth})");
             }
 
             turnCount++;
@@ -270,6 +278,21 @@ public class BattleTestRunner : MonoBehaviour
                 foreach (HeroInstance member in team2.Members)
                 {
                     member.skills.Add(testHealSkill);
+                }
+            }
+        }
+
+        // Test-only progression hook: level Team 1 through the real
+        // progression API so leveled combat can be observed before any
+        // reward or save system exists.
+        if (teamOneBonusExperience > 0)
+        {
+            foreach (HeroInstance hero in team1.Members)
+            {
+                int levelsGained = hero.AddExperience(teamOneBonusExperience);
+                if (levelsGained > 0)
+                {
+                    Debug.Log($"BattleTestRunner: {hero.displayName} is now level {hero.Level} (max {hero.MaxLevel}).");
                 }
             }
         }

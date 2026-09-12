@@ -647,7 +647,7 @@ public class BattleHud : MonoBehaviour
         /// </summary>
         public void Refresh()
         {
-            int maxHealth = Hero.data != null ? Hero.data.baseHealth : 0;
+            int maxHealth = Hero.data != null ? Hero.maxHealth : 0;
             if (Hero.currentHealth == lastHealth && maxHealth == lastMaxHealth && Hero.isAlive == lastAlive)
             {
                 return;
