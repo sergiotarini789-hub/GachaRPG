@@ -218,6 +218,9 @@ public class BattleHud : MonoBehaviour
     /// <summary>Dimmed subtitle text inside the confirmation dialog.</summary>
     private static readonly Color OverlaySubColor = new Color(1f, 1f, 1f, 0.55f);
 
+    /// <summary>Dark label color on gold (PlayerAccent) buttons; mirrors the main menu's gold-button text.</summary>
+    private static readonly Color TextOnGold = new Color(0.09f, 0.11f, 0.17f);
+
     /// <summary>Font size of the PAUSE button label.</summary>
     private const int PauseButtonFontSize = 18;
 
