@@ -5,15 +5,18 @@ using UnityEngine;
 /// <summary>
 /// Plain C# class representing one owned hero at runtime, instantiated from
 /// a <see cref="HeroData"/> template. Owns ALL of the hero's progression
-/// state - level, experience, ascension rank, awakening rank, Hero Souls,
-/// and per-skill levels - and derives its combat stats from the template's
-/// base stats plus its <see cref="HeroGrowth"/> curve and the ascension /
-/// awakening modifiers (see <see cref="CalculateCurrentStats"/>). The
-/// template asset never changes: progression mutates only this instance.
+/// state - level, experience, ascension rank, awakening rank, constellation
+/// rank (C0-C6, one per duplicate copy of this hero), and per-skill levels -
+/// and derives its combat stats from the template's base stats plus its
+/// <see cref="HeroGrowth"/> curve and the ascension / awakening modifiers
+/// (see <see cref="CalculateCurrentStats"/>). The template asset never
+/// changes: progression mutates only this instance.
 ///
 /// The effective maximum level is ascension-controlled (see
-/// <see cref="MaxLevel"/>); duplicate summons of the same template become
-/// Hero Souls banked here and are spent on awakening. Battles consume
+/// <see cref="MaxLevel"/>); duplicate summons of the same template raise the
+/// constellation rank through <see cref="ApplyDuplicate"/> (hard-capped at
+/// C6 - extra duplicates become Hero Tokens on the wallet; see
+/// <see cref="HeroRoster.ApplyDuplicate"/>), and battles consume
 /// <see cref="CreateCombatClone"/> copies so combat mutations (health,
 /// cooldowns) never dirty the roster's authoritative progression.
 ///
@@ -70,11 +73,20 @@ public class HeroInstance
     /// <summary>Awakening rank (0..awakeningSteps.Length); each reached rank applies its step's stat bonuses.</summary>
     private int awakeningRank;
 
-    /// <summary>Hero Souls banked from duplicate summons; spent on awakening.</summary>
-    private int souls;
+    /// <summary>
+    /// Constellation rank (0..HeroProgression.MaxConstellationRank, i.e. C0-C6):
+    /// one rank per duplicate copy of this hero. C0 = obtained but no
+    /// duplicates; C6 is the hard cap. NEVER mutated directly - duplicates
+    /// flow through <see cref="ApplyDuplicate"/>, the single authoritative
+    /// path.
+    /// </summary>
+    private int constellationRank;
 
     /// <summary>This instance's resolved awakening steps (authored per-hero data, or the shared defaults).</summary>
     private readonly AwakeningStep[] awakeningSteps;
+
+    /// <summary>This instance's resolved constellation steps (authored per-hero data, or the shared defaults).</summary>
+    private readonly ConstellationStep[] constellationSteps;
 
     /// <summary>
     /// The hero's current level, from 1 up to <see cref="MaxLevel"/>. Changes
@@ -102,8 +114,18 @@ public class HeroInstance
     /// <summary>Current awakening rank; each rank applies its step's stat bonuses.</summary>
     public int Awakening => awakeningRank;
 
-    /// <summary>Banked Hero Souls (from duplicate summons); spent on awakening.</summary>
-    public int Souls => souls;
+    /// <summary>
+    /// Current constellation rank (C0-C6): one per duplicate copy of this
+    /// hero. Constellation is a separate progression layer from awakening -
+    /// it is duplicate-driven, while awakening is material-driven.
+    /// </summary>
+    public int Constellation => constellationRank;
+
+    /// <summary>The highest constellation rank any hero can reach (C6, the hard cap).</summary>
+    public int MaxConstellation => HeroProgression.MaxConstellationRank;
+
+    /// <summary>Whether this hero has reached the C6 constellation cap.</summary>
+    public bool IsMaxConstellation => constellationRank >= HeroProgression.MaxConstellationRank;
 
     /// <summary>The highest awakening rank this hero can reach (0 when no steps exist).</summary>
     public int MaxAwakeningRank => awakeningSteps.Length;
@@ -169,6 +191,12 @@ public class HeroInstance
         awakeningSteps = data.awakeningSteps != null && data.awakeningSteps.Count > 0
             ? data.awakeningSteps.ToArray()
             : HeroProgression.DefaultAwakeningSteps(data);
+
+        // Resolve the constellation configuration the same way: authored
+        // per-hero steps, or shared placeholder defaults (also logged).
+        constellationSteps = data.constellationSteps != null && data.constellationSteps.Count > 0
+            ? data.constellationSteps.ToArray()
+            : HeroProgression.DefaultConstellationSteps(data);
 
         CalculateCurrentStats();
         currentHealth = maxHealth;
@@ -345,17 +373,42 @@ public class HeroInstance
     }
 
     // ---------------------------------------------------------------------
-    // Hero Souls & Awakening (souls come from duplicate summons).
+    // Constellation (C0-C6; one rank per duplicate copy of this hero).
     // ---------------------------------------------------------------------
 
-    /// <summary>Adds Hero Souls (duplicate summons, development tools). Negative amounts are ignored.</summary>
-    public void AddSouls(int amount)
+    /// <summary>
+    /// THE single authoritative path every duplicate of this hero takes
+    /// (summon duplicates, the roster's debug duplicate tool, and duplicate
+    /// consolidation all flow through here - never poke the rank directly).
+    /// Advances the constellation by exactly one rank and never past C6.
+    /// Returns true when the rank advanced; returns false - changing
+    /// nothing - when the hero is already at C6, in which case the caller
+    /// converts the extra duplicate into Hero Tokens (see
+    /// <see cref="HeroRoster.ApplyDuplicate"/>). Constellation steps are
+    /// data + display only for now: no combat effect system consumes them
+    /// yet, so this does not recalculate stats.
+    /// </summary>
+    public bool ApplyDuplicate()
     {
-        if (amount > 0)
+        if (constellationRank >= HeroProgression.MaxConstellationRank)
         {
-            souls += amount;
+            return false; // C6 is the hard cap; the caller converts the extra duplicate.
         }
+
+        constellationRank++;
+        return true;
     }
+
+    /// <summary>The next constellation rank's configuration, or null at (or beyond) the C6 cap.</summary>
+    public ConstellationStep NextConstellationStep()
+    {
+        return constellationRank < constellationSteps.Length ? constellationSteps[constellationRank] : null;
+    }
+
+    // ---------------------------------------------------------------------
+    // Awakening (ranks bought with Awakening Materials from the wallet;
+    // deliberately independent of duplicates and the constellation).
+    // ---------------------------------------------------------------------
 
     /// <summary>The next awakening rank's configuration, or null at (or without) the cap.</summary>
     public AwakeningStep NextAwakeningStep()
@@ -363,8 +416,8 @@ public class HeroInstance
         return awakeningRank < awakeningSteps.Length ? awakeningSteps[awakeningRank] : null;
     }
 
-    /// <summary>The soul cost of awakening to the given 1-based rank: the step's override, or the default (10 x rank).</summary>
-    public int AwakeningSoulCost(int targetRank)
+    /// <summary>The Awakening Material cost of awakening to the given 1-based rank: the step's override, or the default (10 x rank).</summary>
+    public int AwakeningMaterialCost(int targetRank)
     {
         if (awakeningSteps.Length == 0)
         {
@@ -373,16 +426,17 @@ public class HeroInstance
 
         int index = Mathf.Clamp(targetRank, 1, awakeningSteps.Length) - 1;
         AwakeningStep step = awakeningSteps[index];
-        return step != null && step.requiredSouls > 0
-            ? step.requiredSouls
-            : HeroProgression.SoulCostForRank(targetRank);
+        return step != null && step.requiredAwakeningMaterials > 0
+            ? step.requiredAwakeningMaterials
+            : HeroProgression.AwakeningMaterialCostForRank(targetRank);
     }
 
     /// <summary>
     /// Whether the hero can awaken right now: a next rank must exist and
-    /// enough souls must be banked. The reason describes what is missing.
+    /// the wallet must cover the rank's Awakening Material cost. The reason
+    /// describes what is missing.
     /// </summary>
-    public bool CanAwaken(out string reason)
+    public bool CanAwaken(PlayerWallet wallet, out string reason)
     {
         if (awakeningSteps.Length == 0)
         {
@@ -396,10 +450,10 @@ public class HeroInstance
             return false;
         }
 
-        int cost = AwakeningSoulCost(awakeningRank + 1);
-        if (souls < cost)
+        int cost = AwakeningMaterialCost(awakeningRank + 1);
+        if (wallet == null || !wallet.CanAfford(0, 0, 0, cost))
         {
-            reason = souls + " / " + cost + " souls";
+            reason = (wallet != null ? wallet.awakeningMaterials : 0) + " / " + cost + " awakening materials";
             return false;
         }
 
@@ -408,18 +462,19 @@ public class HeroInstance
     }
 
     /// <summary>
-    /// Awakens to the next rank: consumes the rank's soul cost, raises the
-    /// rank, and recalculates stats. Refuses (returns false, changes
-    /// nothing) when <see cref="CanAwaken"/> fails; souls never go negative.
+    /// Awakens to the next rank: consumes the rank's Awakening Material
+    /// cost from the wallet, raises the rank, and recalculates stats.
+    /// Refuses (returns false, changes nothing - including the wallet) when
+    /// <see cref="CanAwaken"/> fails.
     /// </summary>
-    public bool Awaken()
+    public bool Awaken(PlayerWallet wallet)
     {
-        if (!CanAwaken(out _))
+        if (!CanAwaken(wallet, out _))
         {
             return false;
         }
 
-        souls -= AwakeningSoulCost(awakeningRank + 1);
+        wallet.TryConsume(0, 0, 0, AwakeningMaterialCost(awakeningRank + 1));
         awakeningRank++;
         CalculateCurrentStats();
         return true;
@@ -451,7 +506,7 @@ public class HeroInstance
 
         int gold = HeroProgression.AscensionGoldCost(ascensionRank + 1);
         int materials = HeroProgression.AscensionMaterialCost(ascensionRank + 1);
-        if (wallet == null || !wallet.CanAfford(gold, materials, 0))
+        if (wallet == null || !wallet.CanAfford(gold, materials, 0, 0))
         {
             reason = "costs " + gold + " gold + " + materials + " ascension materials";
             return false;
@@ -477,6 +532,7 @@ public class HeroInstance
         wallet.TryConsume(
             HeroProgression.AscensionGoldCost(ascensionRank + 1),
             HeroProgression.AscensionMaterialCost(ascensionRank + 1),
+            0,
             0);
         ascensionRank++;
         CalculateCurrentStats();
@@ -538,7 +594,7 @@ public class HeroInstance
 
         int gold = skill.upgradeGoldCost * level;
         int materials = skill.upgradeMaterialCost * level;
-        if (wallet == null || !wallet.CanAfford(gold, 0, materials))
+        if (wallet == null || !wallet.CanAfford(gold, 0, materials, 0))
         {
             reason = "costs " + gold + " gold + " + materials + " skill materials";
             return false;
@@ -562,7 +618,7 @@ public class HeroInstance
         }
 
         int level = GetSkillLevel(skill);
-        wallet.TryConsume(skill.upgradeGoldCost * level, 0, skill.upgradeMaterialCost * level);
+        wallet.TryConsume(skill.upgradeGoldCost * level, 0, skill.upgradeMaterialCost * level, 0);
         skillLevels[skill] = level + 1;
         return true;
     }
@@ -582,8 +638,8 @@ public class HeroInstance
 
     /// <summary>
     /// Creates a battle-ready copy of this hero: the same template, level,
-    /// XP, ascension, awakening, souls, and skill levels, with freshly
-    /// calculated stats at full health. Battles mutate only the copy
+    /// XP, ascension, awakening, constellation, and skill levels, with
+    /// freshly calculated stats at full health. Battles mutate only the copy
     /// (health, cooldowns), so the roster's authoritative progression is
     /// never dirtied - the clone is re-derived from this instance at every
     /// battle start, making the roster the single source of truth.
@@ -596,7 +652,7 @@ public class HeroInstance
         clone.Experience = Experience;
         clone.ascensionRank = ascensionRank;
         clone.awakeningRank = awakeningRank;
-        clone.souls = souls;
+        clone.constellationRank = constellationRank;
         foreach (KeyValuePair<SkillData, int> pair in skillLevels)
         {
             clone.skillLevels[pair.Key] = pair.Value;
@@ -622,7 +678,7 @@ public class HeroInstance
 
         ascensionRank = Mathf.Clamp(saved.ascension, 0, HeroProgression.MaxAscensionRank);
         awakeningRank = Mathf.Clamp(saved.awakening, 0, awakeningSteps.Length);
-        souls = Mathf.Max(0, saved.souls);
+        constellationRank = Mathf.Clamp(saved.constellation, 0, HeroProgression.MaxConstellationRank);
         Level = Mathf.Clamp(saved.level, 1, MaxLevel);
         Experience = IsMaxLevel ? 0 : Mathf.Max(0, saved.experience);
 
@@ -647,7 +703,7 @@ public class HeroInstance
 
     /// <summary>
     /// Development-only reset: wipes this hero back to a fresh level-1
-    /// state (no XP, no ranks, no souls, all skills level 1).
+    /// state (no XP, no ranks, no constellation, all skills level 1).
     /// </summary>
     public void ResetProgression()
     {
@@ -655,7 +711,7 @@ public class HeroInstance
         Experience = 0;
         ascensionRank = 0;
         awakeningRank = 0;
-        souls = 0;
+        constellationRank = 0;
         skillLevels.Clear();
         CalculateCurrentStats();
         currentHealth = maxHealth;

@@ -2,16 +2,41 @@ using System.Collections.Generic;
 using UnityEngine;
 
 /// <summary>
+/// What one duplicate of a hero resolved to when it was applied to the
+/// roster: a brand-new C0 hero, a constellation rank advance (C0-C6), or -
+/// for a hero already at the C6 cap - an extra duplicate converted into
+/// Hero Tokens.
+/// </summary>
+public enum DuplicateResult
+{
+    /// <summary>The hero was not owned yet; a new HeroInstance joined the roster at C0.</summary>
+    NewHero,
+
+    /// <summary>The hero was owned; its constellation advanced by one rank (never past C6).</summary>
+    ConstellationAdvanced,
+
+    /// <summary>The hero was already at C6; the extra duplicate became Hero Tokens on the wallet.</summary>
+    MaxConstellationExtra
+}
+
+/// <summary>
 /// The player's owned heroes: the authoritative collection of live
-/// <see cref="HeroInstance"/> progression state (level, experience). Plain
-/// C# with no Unity dependencies, so any future system - the collection UI,
-/// gacha, rewards, a save system - can own, query, and extend it.
+/// <see cref="HeroInstance"/> progression state (level, experience,
+/// constellation). Plain C# with no Unity dependencies, so any future
+/// system - the collection UI, gacha, rewards, a save system - can own,
+/// query, and extend it.
 ///
 /// The roster is intentionally minimal: it owns instances in acquisition
 /// order and nothing else. It never touches combat - battles keep building
 /// their own ephemeral <see cref="HeroInstance"/>s from the same
 /// <see cref="HeroData"/> templates, exactly as they always have - and it
 /// holds no UI state of its own.
+///
+/// Duplicates of the same hero never create second roster entries:
+/// <see cref="ApplyDuplicate"/> is the one authoritative path every
+/// duplicate takes (summons, debug tools, consolidation), advancing the
+/// owned instance's constellation C0-C6 and converting extra C6 duplicates
+/// into Hero Tokens on the wallet.
 /// </summary>
 public class HeroRoster
 {
@@ -25,10 +50,10 @@ public class HeroRoster
 
     /// <summary>
     /// Adds an owned hero to the roster. Callers instantiate the
-    /// <see cref="HeroInstance"/> (for example from a gacha result or the
-    /// initial grant) and hand it over; the roster never mutates it.
-    /// Duplicate copies of the same <see cref="HeroData"/> are allowed -
-    /// hero collectors can own more than one of the same hero.
+    /// <see cref="HeroInstance"/> (for example from an initial grant) and
+    /// hand it over; the roster never mutates it. Duplicate copies of the
+    /// same <see cref="HeroData"/> are allowed for legacy saves - they are
+    /// consolidated on load (see <see cref="ConsolidateDuplicates"/>).
     /// </summary>
     public void Add(HeroInstance hero)
     {
@@ -40,8 +65,8 @@ public class HeroRoster
 
     /// <summary>
     /// The player's instance of a template, or null when the hero is not
-    /// owned. With duplicate-to-souls summoning there is normally exactly
-    /// one primary instance per template.
+    /// owned. One primary instance per template - duplicates advance the
+    /// constellation instead of adding entries.
     /// </summary>
     public HeroInstance FindByData(HeroData data)
     {
@@ -68,14 +93,60 @@ public class HeroRoster
     }
 
     /// <summary>
-    /// Safe migration for rosters created before duplicates became souls:
-    /// keeps one primary instance per template - the most progressed (the
-    /// highest level, ties keep the earlier slot) - and converts every
-    /// extra instance into Hero Souls on that primary, so no level, XP,
-    /// ascension, or awakening is ever lost. Returns how many duplicates
-    /// were converted.
+    /// THE authoritative duplicate path - summons, the Heroes screen's
+    /// debug duplicate tool, and any future system all apply duplicates
+    /// through here, so the constellation can never become inconsistent:
+    /// - hero not owned: a brand-new HeroInstance joins the roster at C0;
+    /// - owned below C6: the owned instance's constellation advances by 1;
+    /// - owned at C6: the constellation stays C6 and the extra duplicate
+    ///   converts into Hero Tokens on the wallet (the shop's currency).
+    /// Returns exactly what the duplicate resolved to.
     /// </summary>
-    public int ConsolidateDuplicates()
+    public DuplicateResult ApplyDuplicate(HeroData template, PlayerWallet wallet)
+    {
+        HeroInstance owned = FindByData(template);
+        if (owned == null)
+        {
+            Add(new HeroInstance(template));
+            return DuplicateResult.NewHero;
+        }
+
+        return ApplyDuplicateToInstance(owned, wallet);
+    }
+
+    /// <summary>
+    /// The shared duplicate rule for an already-owned instance: advance the
+    /// constellation through <see cref="HeroInstance.ApplyDuplicate"/>, or
+    /// convert the extra duplicate into Hero Tokens at the C6 cap. Used by
+    /// <see cref="ApplyDuplicate"/> and <see cref="ConsolidateDuplicates"/>
+    /// so the rule exists in exactly one place.
+    /// </summary>
+    private static DuplicateResult ApplyDuplicateToInstance(HeroInstance hero, PlayerWallet wallet)
+    {
+        if (hero.ApplyDuplicate())
+        {
+            return DuplicateResult.ConstellationAdvanced;
+        }
+
+        if (wallet != null)
+        {
+            wallet.AddHeroTokens(HeroProgression.HeroTokensPerExtraDuplicate);
+        }
+
+        return DuplicateResult.MaxConstellationExtra;
+    }
+
+    /// <summary>
+    /// Safe migration for rosters that still hold more than one instance
+    /// of the same template (data created before duplicates consolidated):
+    /// keeps one primary instance per template - the most progressed (the
+    /// highest level, ties keep the earlier slot) - and applies every extra
+    /// instance as a duplicate through the authoritative path (constellation
+    /// +1, or a Hero Token when the primary is at C6), so no level, XP,
+    /// ascension, awakening, or constellation is ever lost. Returns how many
+    /// duplicates were converted.
+    /// </summary>
+    public int ConsolidateDuplicates(PlayerWallet wallet)
     {
         int converted = 0;
         for (int i = 0; i < heroes.Count; i++)
@@ -103,14 +174,14 @@ public class HeroRoster
                 }
 
                 heroes.RemoveAt(j);
-                primary.AddSouls(HeroProgression.SoulsPerDuplicate);
+                ApplyDuplicateToInstance(primary, wallet);
                 converted++;
             }
         }
 
         if (converted > 0)
         {
-            Debug.Log("HeroRoster: consolidated " + converted + " duplicate hero(s) into Hero Souls.");
+            Debug.Log("HeroRoster: consolidated " + converted + " duplicate hero(s) into constellation progress (Hero Tokens past C6).");
         }
 
         return converted;

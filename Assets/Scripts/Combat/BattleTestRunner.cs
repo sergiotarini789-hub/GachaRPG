@@ -115,8 +115,10 @@ public class BattleTestRunner : MonoBehaviour
 
     /// <summary>
     /// The player's placeholder progression resources (gold, ascension
-    /// materials, skill materials); persisted with the roster. Ascension,
-    /// skill upgrades, and the LEVEL UP exchange consume from it.
+    /// materials, skill materials, awakening materials, and Hero Tokens
+    /// from extra duplicates past C6); persisted with the roster.
+    /// Ascension, awakening, skill upgrades, the LEVEL UP exchange, and the
+    /// future hero shop consume from it.
     /// </summary>
     private PlayerWallet wallet;
 
@@ -216,8 +218,9 @@ public class BattleTestRunner : MonoBehaviour
         LoadProfile();
 
         // The summon system draws new owned heroes from the same templates
-        // and adds them to the roster.
-        summonService = new SummonService(BuildSummonCatalog(), roster);
+        // and adds them to the roster; extra duplicates of C6 heroes
+        // convert into Hero Tokens on the wallet.
+        summonService = new SummonService(BuildSummonCatalog(), roster, wallet);
 
         if (startWithMainMenu)
         {
@@ -370,10 +373,12 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
-    /// Loads the player profile from the local save, or builds the initial
-    /// grant when no valid save exists, then migrates any pre-souls
-    /// duplicate roster entries safely. The wallet always exists so
-    /// progression actions have something to consume from.
+    /// Loads the player profile from the local save (older formats are
+    /// migrated forward - Hero Souls became the C0-C6 constellation), or
+    /// builds the initial grant when no valid save exists, then safely
+    /// consolidates any legacy duplicate roster entries into constellation
+    /// progress. The wallet always exists so progression actions have
+    /// something to consume from.
     /// </summary>
     private void LoadProfile()
     {
@@ -389,11 +394,14 @@ public class BattleTestRunner : MonoBehaviour
             wallet = new PlayerWallet(
                 HeroProgression.StartingGold,
                 HeroProgression.StartingAscensionMaterials,
-                HeroProgression.StartingSkillMaterials);
+                HeroProgression.StartingSkillMaterials,
+                HeroProgression.StartingAwakeningMaterials,
+                HeroProgression.StartingHeroTokens);
         }
 
-        // Safe migration for data created before duplicates became souls.
-        roster.ConsolidateDuplicates();
+        // Safe migration for data created before duplicates consolidated:
+        // extras become constellation ranks (Hero Tokens past C6).
+        roster.ConsolidateDuplicates(wallet);
     }
 
     /// <summary>The player's placeholder resource wallet; progression actions consume from it.</summary>

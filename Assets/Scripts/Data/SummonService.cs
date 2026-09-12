@@ -17,15 +17,16 @@ using UnityEngine;
 /// Collection or any other system.
 ///
 /// Duplicate handling: when the player already owns the rolled hero's
-/// template, NO second owned instance is created - the duplicate converts
-/// into Hero Souls banked on the existing instance (see
-/// <see cref="HeroRoster.ConsolidateDuplicates"/> for migrating older
-/// duplicate rosters). First-time heroes are brand-new, independent
-/// instances at Level 1 / 0 XP.
+/// template, NO second owned instance is created - the duplicate advances
+/// the owned hero's constellation (C0-C6) through the roster's
+/// authoritative duplicate path (<see cref="HeroRoster.ApplyDuplicate"/>);
+/// an extra duplicate of a hero already at C6 converts into Hero Tokens on
+/// the wallet. First-time heroes are brand-new, independent instances at
+/// Level 1 / 0 XP / C0.
 ///
 /// Invariants: <see cref="HeroData"/> templates are never modified; the
-/// roster is the single owner of the created instances; souls never go
-/// negative.
+/// roster is the single owner of the created instances; the constellation
+/// never exceeds C6.
 /// </summary>
 public class SummonService
 {
@@ -66,6 +67,12 @@ public class SummonService
     /// <summary>The player's roster; every summoned hero is added here.</summary>
     private readonly HeroRoster roster;
 
+    /// <summary>
+    /// The player's wallet; extra duplicates of C6 heroes convert into
+    /// Hero Tokens on it (through the roster's authoritative path).
+    /// </summary>
+    private readonly PlayerWallet wallet;
+
     /// <summary>The rarity table, in roll order (the roll walks entries cumulatively).</summary>
     private readonly List<RarityOdds> odds;
 
@@ -79,12 +86,12 @@ public class SummonService
     public int CatalogCount => catalog.Count;
 
     /// <summary>
-    /// Creates the prototype summon service: the given catalog and roster
-    /// with the default rarity weights (Common 60 / Rare 30 / Epic 9 /
-    /// Legendary 1).
+    /// Creates the prototype summon service: the given catalog, roster, and
+    /// wallet with the default rarity weights (Common 60 / Rare 30 /
+    /// Epic 9 / Legendary 1).
     /// </summary>
-    public SummonService(IEnumerable<HeroData> availableHeroes, HeroRoster roster)
-        : this(availableHeroes, roster, DefaultOdds())
+    public SummonService(IEnumerable<HeroData> availableHeroes, HeroRoster roster, PlayerWallet wallet)
+        : this(availableHeroes, roster, wallet, DefaultOdds())
     {
     }
 
@@ -94,7 +101,7 @@ public class SummonService
     /// skipped and duplicate template references are deduplicated; entries
     /// with non-positive weights are ignored.
     /// </summary>
-    public SummonService(IEnumerable<HeroData> availableHeroes, HeroRoster roster, IEnumerable<RarityOdds> rarityOdds)
+    public SummonService(IEnumerable<HeroData> availableHeroes, HeroRoster roster, PlayerWallet wallet, IEnumerable<RarityOdds> rarityOdds)
     {
         catalog = new List<HeroData>();
         if (availableHeroes != null)
@@ -109,6 +116,7 @@ public class SummonService
         }
 
         this.roster = roster;
+        this.wallet = wallet;
 
         odds = new List<RarityOdds>();
         if (rarityOdds != null)
@@ -138,13 +146,16 @@ public class SummonService
     /// Performs one summon: rolls a rarity on the weighted table, picks a
     /// random template from that rarity's pool (walking to the next rarity
     /// with heroes when the rolled pool is empty - the fallback is logged),
-    /// then either adds a brand-new Level 1 / 0 XP <see cref="HeroInstance"/>
-    /// to the roster (first time owning this hero) or, when the hero is
-    /// already owned, converts the duplicate into Hero Souls on the
-    /// existing instance - the original hero and its progression are never
-    /// overwritten or merged. Returns the result for the UI to render, or
-    /// null when no hero could be summoned at all (empty catalog or roster;
-    /// the reason is logged - never thrown).
+    /// then applies the outcome through the roster's authoritative
+    /// duplicate path: a brand-new Level 1 / 0 XP / C0
+    /// <see cref="HeroInstance"/> joins the roster the first time this
+    /// hero is obtained, a duplicate advances the owned hero's
+    /// constellation by one rank (C0-C6), and an extra duplicate of a hero
+    /// already at C6 converts into Hero Tokens on the wallet - the original
+    /// hero and its progression are never overwritten or merged. Returns
+    /// the result for the UI to render, or null when no hero could be
+    /// summoned at all (empty catalog or roster; the reason is logged -
+    /// never thrown).
     /// </summary>
     public SummonResult Summon()
     {
@@ -162,20 +173,15 @@ public class SummonService
             return null;
         }
 
+        // Apply the summon through the roster's one authoritative duplicate
+        // path: new hero at C0, owned hero's constellation +1, or a Hero
+        // Token when the owned hero is already at the C6 cap.
         HeroInstance owned = roster.FindByData(chosen);
-        if (owned != null)
-        {
-            // Duplicate: the hero stays owned exactly once; the copy becomes
-            // souls banked on the existing instance.
-            owned.AddSouls(HeroProgression.SoulsPerDuplicate);
-            return new SummonResult(owned, rolled, isNewHero: false);
-        }
+        int constellationBefore = owned != null ? owned.Constellation : 0;
+        DuplicateResult outcome = roster.ApplyDuplicate(chosen, wallet);
+        HeroInstance hero = outcome == DuplicateResult.NewHero ? roster.FindByData(chosen) : owned;
 
-        // A fresh, independent owned hero: level 1, 0 XP, its own stats and
-        // cooldown state. The template is only read, never modified.
-        HeroInstance hero = new HeroInstance(chosen);
-        roster.Add(hero);
-        return new SummonResult(hero, rolled, isNewHero: true);
+        return new SummonResult(hero, rolled, outcome, constellationBefore);
     }
 
     /// <summary>
@@ -252,9 +258,11 @@ public class SummonService
 /// <summary>
 /// Outcome of one summon: the hero the summon resolved to (the brand-new
 /// instance for a first-time hero, or the existing owned instance that just
-/// banked the duplicate's souls), what the rarity roll produced, and
-/// whether this was a new hero or a duplicate, so the UI can show exactly
-/// what happened without opening another screen.
+/// advanced its constellation), what the rarity roll produced, what the
+/// duplicate resolved to (new hero / constellation advance / Hero Token),
+/// and the constellation rank before the summon - everything the UI needs
+/// to show exactly what happened (e.g. "C2 -> C3") without opening another
+/// screen or formatting any of it itself.
 /// </summary>
 public class SummonResult
 {
@@ -264,8 +272,17 @@ public class SummonResult
     /// <summary>The rarity the weighted roll selected.</summary>
     public HeroRarity RolledRarity { get; }
 
-    /// <summary>True when a brand-new HeroInstance was added to the roster; false for a duplicate (souls added).</summary>
-    public bool IsNewHero { get; }
+    /// <summary>What the summon resolved to: new hero, constellation advance, or extra duplicate past C6.</summary>
+    public DuplicateResult Outcome { get; }
+
+    /// <summary>The hero's constellation rank before this summon (0 for a new hero).</summary>
+    public int ConstellationBefore { get; }
+
+    /// <summary>The hero's constellation rank after this summon (C0 for a new hero).</summary>
+    public int ConstellationAfter => Hero != null ? Hero.Constellation : 0;
+
+    /// <summary>True when a brand-new HeroInstance was added to the roster; false for a duplicate.</summary>
+    public bool IsNewHero => Outcome == DuplicateResult.NewHero;
 
     /// <summary>The rarity of the hero actually summoned (the pool that was used).</summary>
     public HeroRarity ActualRarity => Hero != null && Hero.data != null ? Hero.data.rarity : RolledRarity;
@@ -273,10 +290,11 @@ public class SummonResult
     /// <summary>True when the rolled rarity had no heroes and a fallback pool was used.</summary>
     public bool FallbackUsed => ActualRarity != RolledRarity;
 
-    public SummonResult(HeroInstance hero, HeroRarity rolledRarity, bool isNewHero)
+    public SummonResult(HeroInstance hero, HeroRarity rolledRarity, DuplicateResult outcome, int constellationBefore)
     {
         Hero = hero;
         RolledRarity = rolledRarity;
-        IsNewHero = isNewHero;
+        Outcome = outcome;
+        ConstellationBefore = constellationBefore;
     }
 }

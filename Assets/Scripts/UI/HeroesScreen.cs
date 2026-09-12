@@ -24,16 +24,19 @@ using UnityEngine.UI;
 ///   hero and updates the details view;
 /// - a details panel on the right showing the selected hero's portrait
 ///   placeholder, name, rarity, role, level, current XP and the XP
-///   required for the next level, ascension rank, awakening rank, Hero
-///   Soul progress, current stats (HP / ATK / DEF / SPD), and its skills
-///   with per-skill levels;
+///   required for the next level, ascension rank, awakening rank,
+///   constellation rank (C0-C6, one per duplicate copy) with the next
+///   rank's planned effect, current stats (HP / ATK / DEF / SPD), and its
+///   skills with per-skill levels;
 /// - functional progression controls for the selected hero: LEVEL UP
-///   (placeholder gold-to-XP exchange), ASCEND, AWAKEN (spends Hero
-///   Souls), and per-skill UPGRADE buttons - each button reflects the
+///   (placeholder gold-to-XP exchange), ASCEND, AWAKEN (spends Awakening
+///   Materials), and per-skill UPGRADE buttons - each button reflects the
 ///   hero's and wallet's real state and performs the operation through the
 ///   HeroInstance progression APIs, never fake interactions;
 /// - a clearly marked DEBUG tool column (development only): add XP, add
-///   gold, add a soul, and reset the selected hero's progression.
+///   gold, apply a duplicate (the exact path a duplicate summon takes),
+///   add Awakening Materials / Hero Tokens, and reset the selected hero's
+///   progression.
 ///
 /// This is a pure view layer: every value is read from the actual
 /// <see cref="HeroInstance"/> (progression and current stats) and its
@@ -196,6 +199,9 @@ public class HeroesScreen : MonoBehaviour
     /// <summary>Owned-hero count chip in the top bar.</summary>
     private Text countText;
 
+    /// <summary>Hero Token balance chip in the top bar (the post-C6 duplicate currency).</summary>
+    private Text tokenText;
+
     /// <summary>The currently selected hero whose details are shown, or null when the roster is empty.</summary>
     private HeroInstance selectedHero;
 
@@ -252,8 +258,11 @@ public class HeroesScreen : MonoBehaviour
     /// <summary>Awakening rank line with the next rank's bonuses.</summary>
     private Text awakeningLine;
 
-    /// <summary>Hero Soul progress line, e.g. "SOULS 12 / 20".</summary>
-    private Text soulsLine;
+    /// <summary>Constellation rank line, e.g. "CONSTELLATION  C3 / C6" or "MAX CONSTELLATION  C6".</summary>
+    private Text constellationLine;
+
+    /// <summary>Constellation detail line: the next rank's planned effect (placeholder text).</summary>
+    private Text constellationDetail;
 
     /// <summary>Right-hand action column root (LEVEL UP / ASCEND / AWAKEN, status, DEBUG tools); hidden without a selection.</summary>
     private GameObject controlsRoot;
@@ -475,6 +484,15 @@ public class HeroesScreen : MonoBehaviour
         }
 
         detailEmptyText.gameObject.SetActive(!hasHero);
+
+        // Hero Token balance (top-bar chip) stays current with or without a
+        // selection; extra duplicates of C6 heroes earn these.
+        PlayerWallet walletView = runner != null ? runner.Wallet : null;
+        if (tokenText != null)
+        {
+            tokenText.text = (walletView != null ? walletView.heroTokens : 0) + " HERO TOKENS";
+        }
+
         if (!hasHero)
         {
             ClearSkillRows();
@@ -538,19 +556,28 @@ public class HeroesScreen : MonoBehaviour
                 + " (" + AwakeningBonusText(nextStep) + ")"
             : "AWAKENING  " + hero.Awakening + " / " + hero.MaxAwakeningRank + "   (MAX)";
 
-        // Hero Soul progress toward the next awakening (plain total at max).
-        if (hero.MaxAwakeningRank == 0)
+        // Constellation rank (duplicate-driven progression; C6 is the hard
+        // cap) plus the next rank's planned effect. Constellation effects
+        // are placeholder design data: displayed as planned, not applied in
+        // combat yet.
+        ConstellationStep nextConstellation = hero.NextConstellationStep();
+        constellationLine.text = hero.IsMaxConstellation
+            ? "MAX CONSTELLATION  " + HeroProgression.ConstellationLabel(hero.Constellation)
+            : "CONSTELLATION  " + HeroProgression.ConstellationLabel(hero.Constellation)
+                + " / " + HeroProgression.ConstellationLabel(hero.MaxConstellation);
+
+        if (hero.IsMaxConstellation)
         {
-            soulsLine.text = "SOULS  " + hero.Souls + "   (no awakening configured)";
+            constellationDetail.text = "All constellation ranks unlocked.";
         }
-        else if (nextStep != null)
+        else if (nextConstellation != null && !string.IsNullOrEmpty(nextConstellation.description))
         {
-            int cost = hero.AwakeningSoulCost(hero.Awakening + 1);
-            soulsLine.text = "SOULS  " + hero.Souls + " / " + cost;
+            constellationDetail.text = "Next " + HeroProgression.ConstellationLabel(hero.Constellation + 1)
+                + ": " + nextConstellation.description + " (planned)";
         }
         else
         {
-            soulsLine.text = "SOULS  " + hero.Souls;
+            constellationDetail.text = string.Empty;
         }
 
         // Current stats straight off the instance.
@@ -603,10 +630,10 @@ public class HeroesScreen : MonoBehaviour
             int gold = HeroProgression.AscensionGoldCost(hero.Ascension + 1);
             int materials = HeroProgression.AscensionMaterialCost(hero.Ascension + 1);
             ascendLabel.text = "ASCEND   " + gold + " gold + " + materials + " mats";
-            ascendButton.interactable = wallet != null && wallet.CanAfford(gold, materials, 0);
+            ascendButton.interactable = wallet != null && wallet.CanAfford(gold, materials, 0, 0);
         }
 
-        // AWAKEN: soul progress; enabled only when affordable.
+        // AWAKEN: Awakening Material cost from the wallet; enabled only when affordable.
         if (hero.MaxAwakeningRank == 0)
         {
             awakenLabel.text = "NO AWAKENING";
@@ -619,9 +646,10 @@ public class HeroesScreen : MonoBehaviour
         }
         else
         {
-            int soulCost = hero.AwakeningSoulCost(hero.Awakening + 1);
-            awakenLabel.text = "AWAKEN   " + hero.Souls + " / " + soulCost + " SOULS";
-            awakenButton.interactable = hero.Souls >= soulCost;
+            int materialCost = hero.AwakeningMaterialCost(hero.Awakening + 1);
+            int ownedMaterials = wallet != null ? wallet.awakeningMaterials : 0;
+            awakenLabel.text = "AWAKEN   " + ownedMaterials + " / " + materialCost + " MATS";
+            awakenButton.interactable = hero.CanAwaken(wallet, out _);
         }
     }
 
@@ -658,7 +686,7 @@ public class HeroesScreen : MonoBehaviour
         }
 
         int cost = HeroProgression.LevelUpGoldCostPerLevel * (hero.Level + 1);
-        if (!wallet.TryConsume(cost, 0, 0))
+        if (!wallet.TryConsume(cost, 0, 0, 0))
         {
             SetStatus("Not enough gold.");
             return;
@@ -690,18 +718,19 @@ public class HeroesScreen : MonoBehaviour
         AfterProgressionAction();
     }
 
-    /// <summary>AWAKEN: spends Hero Souls on the next awakening rank.</summary>
+    /// <summary>AWAKEN: spends Awakening Materials from the wallet on the next awakening rank.</summary>
     private void OnAwakenClicked()
     {
         HeroInstance hero = selectedHero;
-        if (hero == null)
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || wallet == null)
         {
             return;
         }
 
-        if (!hero.Awaken())
+        if (!hero.Awaken(wallet))
         {
-            hero.CanAwaken(out string reason);
+            hero.CanAwaken(wallet, out string reason);
             SetStatus("Cannot awaken: " + reason + ".");
             return;
         }
@@ -759,17 +788,63 @@ public class HeroesScreen : MonoBehaviour
         AfterProgressionAction();
     }
 
-    /// <summary>DEBUG: adds one Hero Soul to the selected hero (development tool).</summary>
-    private void OnDebugAddSoul()
+    /// <summary>
+    /// DEBUG: applies one duplicate of the selected hero through the exact
+    /// same authoritative path a duplicate summon takes (constellation +1,
+    /// or a Hero Token when the hero is already C6) - development tool.
+    /// </summary>
+    private void OnDebugAddDuplicate()
     {
         HeroInstance hero = selectedHero;
-        if (hero == null)
+        HeroRoster roster = runner != null ? runner.Roster : null;
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || roster == null || hero.data == null)
         {
             return;
         }
 
-        hero.AddSouls(1);
-        SetStatus("DEBUG: +1 soul.");
+        DuplicateResult outcome = roster.ApplyDuplicate(hero.data, wallet);
+        switch (outcome)
+        {
+            case DuplicateResult.NewHero:
+                SetStatus("DEBUG: new hero added at C0.");
+                break;
+            case DuplicateResult.MaxConstellationExtra:
+                SetStatus("DEBUG: extra duplicate past C6 - +" + HeroProgression.HeroTokensPerExtraDuplicate + " Hero Token.");
+                break;
+            default:
+                SetStatus("DEBUG: duplicate applied - constellation " + HeroProgression.ConstellationLabel(hero.Constellation) + ".");
+                break;
+        }
+
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: adds 50 Awakening Materials to the wallet (development tool).</summary>
+    private void OnDebugAddAwakeningMaterials()
+    {
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (wallet == null)
+        {
+            return;
+        }
+
+        wallet.awakeningMaterials += 50;
+        SetStatus("DEBUG: +50 Awakening Materials.");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: adds 10 Hero Tokens to the wallet (development tool).</summary>
+    private void OnDebugAddTokens()
+    {
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (wallet == null)
+        {
+            return;
+        }
+
+        wallet.AddHeroTokens(10);
+        SetStatus("DEBUG: +10 Hero Tokens.");
         AfterProgressionAction();
     }
 
@@ -868,6 +943,21 @@ public class HeroesScreen : MonoBehaviour
             CountFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopLeft, TopLeft, Vector2.zero, countRect.sizeDelta);
         countText.color = GoldAccent;
+
+        // ---- Hero Token balance (left of the owned count); filled in RefreshDetails ----
+        RectTransform tokenRect = CreateRect(bar, "TokensChip");
+        tokenRect.anchorMin = new Vector2(1f, 0.5f);
+        tokenRect.anchorMax = new Vector2(1f, 0.5f);
+        tokenRect.pivot = new Vector2(1f, 0.5f);
+        tokenRect.anchoredPosition = new Vector2(-216f, 0f);
+        tokenRect.sizeDelta = new Vector2(230f, 40f);
+
+        CreateSlicedImage(tokenRect, "Back", BadgeColor, panelSprite,
+            TopLeft, TopLeft, Vector2.zero, tokenRect.sizeDelta);
+        tokenText = CreateText(tokenRect, "Label", string.Empty,
+            CountFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            TopLeft, TopLeft, Vector2.zero, tokenRect.sizeDelta);
+        tokenText.color = GoldAccent;
     }
 
     /// <summary>
@@ -979,21 +1069,28 @@ public class HeroesScreen : MonoBehaviour
             TopLeft, TopLeft, new Vector2(300f, -224f), new Vector2(620f, 24f));
         awakeningLine.color = DimTextColor;
 
-        soulsLine = CreateText(panel, "Souls", string.Empty,
+        constellationLine = CreateText(panel, "Constellation", string.Empty,
             DetailXpFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
             TopLeft, TopLeft, new Vector2(300f, -256f), new Vector2(620f, 24f));
-        soulsLine.color = GoldAccent;
+        constellationLine.color = GoldAccent;
+
+        constellationDetail = CreateText(panel, "ConstellationDetail", string.Empty,
+            DetailSkillMetaFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -282f), new Vector2(620f, 34f));
+        constellationDetail.color = DimTextColor;
+        constellationDetail.horizontalOverflow = HorizontalWrapMode.Wrap;
+        constellationDetail.verticalOverflow = VerticalWrapMode.Overflow;
 
         detailSkillsHeader = CreateText(panel, "SkillsHeader", "SKILLS",
             SectionHeaderFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -300f), new Vector2(300f, 34f));
+            TopLeft, TopLeft, new Vector2(300f, -330f), new Vector2(300f, 34f));
         detailSkillsHeader.color = GoldAccent;
 
         RectTransform skills = CreateRect(panel, "Skills");
         skills.anchorMin = TopLeft;
         skills.anchorMax = TopLeft;
         skills.pivot = new Vector2(0f, 1f);
-        skills.anchoredPosition = new Vector2(300f, -338f);
+        skills.anchoredPosition = new Vector2(300f, -368f);
         skills.sizeDelta = new Vector2(SkillRowWidth, 0f);
         skillsRoot = skills;
 
@@ -1024,12 +1121,14 @@ public class HeroesScreen : MonoBehaviour
 
         BuildDebugButton(controls, "DebugXp", "+1000 XP", 0f, -366f, OnDebugAddXp);
         BuildDebugButton(controls, "DebugGold", "+10K GOLD", 174f, -366f, OnDebugAddGold);
-        BuildDebugButton(controls, "DebugSoul", "+1 SOUL", 0f, -420f, OnDebugAddSoul);
-        BuildDebugButton(controls, "DebugReset", "RESET HERO", 174f, -420f, OnDebugResetHero);
+        BuildDebugButton(controls, "DebugDuplicate", "ADD DUPLICATE", 0f, -420f, OnDebugAddDuplicate);
+        BuildDebugButton(controls, "DebugAwakenMats", "+50 AWAK MATS", 174f, -420f, OnDebugAddAwakeningMaterials);
+        BuildDebugButton(controls, "DebugTokens", "+10 TOKENS", 0f, -474f, OnDebugAddTokens);
+        BuildDebugButton(controls, "DebugReset", "RESET HERO", 174f, -474f, OnDebugResetHero);
 
         Text debugNote = CreateText(controls, "DebugNote", "Development tools, not player mechanics.",
             DebugButtonFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(4f, -474f), new Vector2(ActionButtonWidth, 34f));
+            TopLeft, TopLeft, new Vector2(4f, -528f), new Vector2(ActionButtonWidth, 34f));
         debugNote.color = DimTextColor;
         debugNote.horizontalOverflow = HorizontalWrapMode.Wrap;
         debugNote.verticalOverflow = VerticalWrapMode.Overflow;
@@ -1048,7 +1147,7 @@ public class HeroesScreen : MonoBehaviour
             detailPortraitFrame, detailPortraitIcon, detailPortraitGlyph, detailName,
             detailRarityBack, detailRarityText, detailRoleText, detailLevelText, detailXpText,
             detailStatHp, detailStatAtk, detailStatDef, detailStatSpd, detailSkillsHeader,
-            ascensionLine, awakeningLine, soulsLine,
+            ascensionLine, awakeningLine, constellationLine, constellationDetail,
         });
     }
 

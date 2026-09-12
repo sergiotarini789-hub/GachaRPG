@@ -18,11 +18,13 @@ using UnityEngine.UI;
 ///   <see cref="SummonService"/> reports it (the UI holds no rates of its
 ///   own);
 /// - a free SUMMON x1 button (no currency/economy system exists yet);
-/// - a result area showing the hero produced by the latest summon:
-///   "SUMMONED!", portrait placeholder, name, rarity, role, level, and
-///   current stats, all read from the newly created
-///   <see cref="HeroInstance"/>, plus a note when an empty rarity pool
-///   caused a fallback;
+/// - a result area showing what the latest summon produced - "NEW HERO!"
+///   (with the hero's C0 constellation), "DUPLICATE" (with the
+///   constellation advance, e.g. "C2 -> C3"), or "MAX CONSTELLATION" (an
+///   extra duplicate past C6, with the Hero Token gained) - plus the
+///   hero's portrait placeholder, name, rarity, role, level, and current
+///   stats, all read from the live <see cref="HeroInstance"/>, and a note
+///   when an empty rarity pool caused a fallback;
 /// - a VIEW HEROES button that opens the Heroes collection to verify the
 ///   new roster entry.
 ///
@@ -162,11 +164,14 @@ public class SummonScreen : MonoBehaviour
     /// <summary>The rarity-odds panel; its rows are filled in <see cref="BuildOddsPanel"/>.</summary>
     private RectTransform oddsPanelRoot;
 
-    /// <summary>Result title: "NEW HERO!" or "DUPLICATE".</summary>
+    /// <summary>Result title: "NEW HERO!", "DUPLICATE", or "MAX CONSTELLATION".</summary>
     private Text resultTitle;
 
-    /// <summary>Result soul line ("+1 Kael Stormblade Soul (12 total)"); shown for duplicates only.</summary>
-    private Text resultSoulLine;
+    /// <summary>
+    /// Result constellation line: "C0" for a new hero, "C2 -> C3" for a
+    /// duplicate, or "C6  +1 Hero Token" for an extra duplicate past C6.
+    /// </summary>
+    private Text resultConstellationLine;
 
     /// <summary>Result fallback note ("rolled Common - pool empty, fell back to Rare"); hidden unless a fallback happened.</summary>
     private Text resultFallbackNote;
@@ -340,7 +345,8 @@ public class SummonScreen : MonoBehaviour
 
         ShowResult(result);
 
-        // Duplicates banked souls and new heroes joined the roster - persist.
+        // New heroes joined the roster and duplicates advanced constellations
+        // (or earned Hero Tokens) - persist.
         runner.SaveProfile();
     }
 
@@ -368,14 +374,26 @@ public class SummonScreen : MonoBehaviour
         HeroInstance hero = result.Hero;
         HeroData data = hero != null ? hero.data : null;
 
-        // New hero or duplicate: the title says which immediately; duplicates
-        // also show the soul gained and the new total.
-        resultTitle.text = result.IsNewHero ? "NEW HERO!" : "DUPLICATE";
-        resultSoulLine.gameObject.SetActive(!result.IsNewHero && data != null);
-        if (!result.IsNewHero && data != null)
+        // New hero, duplicate, or extra duplicate past C6: the title and the
+        // constellation line say exactly which, generated from the actual
+        // progression state (never hardcoded).
+        resultConstellationLine.gameObject.SetActive(data != null);
+        switch (result.Outcome)
         {
-            resultSoulLine.text = "+" + HeroProgression.SoulsPerDuplicate + " " + data.heroName
-                + " Soul   (" + hero.Souls + " total)";
+            case DuplicateResult.NewHero:
+                resultTitle.text = "NEW HERO!";
+                resultConstellationLine.text = HeroProgression.ConstellationLabel(result.ConstellationAfter);
+                break;
+            case DuplicateResult.MaxConstellationExtra:
+                resultTitle.text = "MAX CONSTELLATION";
+                resultConstellationLine.text = HeroProgression.ConstellationLabel(result.ConstellationAfter)
+                    + "   +" + HeroProgression.HeroTokensPerExtraDuplicate + " Hero Token";
+                break;
+            default:
+                resultTitle.text = "DUPLICATE";
+                resultConstellationLine.text = HeroProgression.ConstellationLabel(result.ConstellationBefore)
+                    + " -> " + HeroProgression.ConstellationLabel(result.ConstellationAfter);
+                break;
         }
 
         if (data == null)
@@ -578,11 +596,11 @@ public class SummonScreen : MonoBehaviour
             TopCenter, TopCenter, new Vector2(0f, -24f), new Vector2(500f, 40f));
         resultTitle.color = GoldAccent;
 
-        resultSoulLine = CreateText(panel, "SoulLine", string.Empty,
+        resultConstellationLine = CreateText(panel, "ConstellationLine", string.Empty,
             ResultNoteFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -68f), new Vector2(700f, 26f));
-        resultSoulLine.color = GoldAccent;
-        resultSoulLine.gameObject.SetActive(false);
+        resultConstellationLine.color = GoldAccent;
+        resultConstellationLine.gameObject.SetActive(false);
 
         resultFallbackNote = CreateText(panel, "FallbackNote", string.Empty,
             ResultNoteFontSize, FontStyle.Normal, TextAnchor.MiddleCenter,

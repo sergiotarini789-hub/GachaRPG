@@ -4,10 +4,11 @@ using UnityEngine;
 
 /// <summary>
 /// Centralized hero-progression configuration: the ascension table, level
-/// caps, awakening defaults, soul rules, placeholder resource amounts, and
-/// the skill/level-up cost model. Every system (HeroInstance, roster,
-/// summon service, Heroes screen, save) reads these values from here -
-/// numeric progression values must never be scattered across UI scripts.
+/// caps, constellation rules (C0-C6), awakening material costs, placeholder
+/// resource amounts, and the skill/level-up cost model. Every system
+/// (HeroInstance, roster, summon service, Heroes screen, save) reads these
+/// values from here - numeric progression values must never be scattered
+/// across UI scripts.
 ///
 /// All values are prototype placeholders chosen so the whole progression
 /// loop is testable before a real economy exists; tune them here in one
@@ -21,8 +22,13 @@ public static class HeroProgression
     // Save format
     // ---------------------------------------------------------------------
 
-    /// <summary>Current save-file version; older or newer files are rejected safely.</summary>
-    public const int CurrentSaveVersion = 1;
+    /// <summary>
+    /// Current save-file version. Version 2 replaced the Hero Souls counter
+    /// with the C0-C6 constellation and added awakening materials + Hero
+    /// Tokens; version-1 files are migrated on load (see
+    /// <see cref="PlayerSaveSystem"/>), future versions are rejected safely.
+    /// </summary>
+    public const int CurrentSaveVersion = 2;
 
     // ---------------------------------------------------------------------
     // Ascension (raises the level cap and grants stat bonuses)
@@ -64,23 +70,45 @@ public static class HeroProgression
     }
 
     // ---------------------------------------------------------------------
-    // Awakening (hero-specific ranks bought with Hero Souls)
+    // Constellation (duplicate-driven ranks C0-C6)
     // ---------------------------------------------------------------------
 
-    /// <summary>How many souls a duplicate summon converts into.</summary>
-    public const int SoulsPerDuplicate = 1;
+    /// <summary>
+    /// The hard constellation cap: ranks run C0 (first copy) to C6 (seventh
+    /// copy). A hero can never exceed C6; duplicates past C6 convert into
+    /// Hero Tokens instead.
+    /// </summary>
+    public const int MaxConstellationRank = 6;
+
+    /// <summary>How many Hero Tokens one extra duplicate of a C6 hero converts into.</summary>
+    public const int HeroTokensPerExtraDuplicate = 1;
 
     /// <summary>
-    /// Default soul cost for awakening to a rank when the hero's
-    /// <see cref="AwakeningStep"/> does not override it: 10 x target rank
-    /// (10 / 20 / 30 / 40 / 50 / 60).
+    /// Display label of a constellation rank ("C0" .. "C6"), clamped to the
+    /// valid range - the single place the label format lives, so the UI
+    /// never formats it itself.
     /// </summary>
-    public const int DefaultSoulCostPerRank = 10;
-
-    /// <summary>The default soul cost for awakening to the given (1-based) rank.</summary>
-    public static int SoulCostForRank(int targetRank)
+    public static string ConstellationLabel(int rank)
     {
-        return DefaultSoulCostPerRank * Mathf.Max(1, targetRank);
+        return "C" + Mathf.Clamp(rank, 0, MaxConstellationRank);
+    }
+
+    // ---------------------------------------------------------------------
+    // Awakening (hero-specific ranks bought with Awakening Materials)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Default Awakening Material cost for awakening to a rank when the
+    /// hero's <see cref="AwakeningStep"/> does not override it: 10 x target
+    /// rank (10 / 20 / 30 / 40 / 50 / 60). Awakening never depends on
+    /// duplicate copies - that is the constellation system.
+    /// </summary>
+    public const int DefaultAwakeningMaterialCostPerRank = 10;
+
+    /// <summary>The default Awakening Material cost for awakening to the given (1-based) rank.</summary>
+    public static int AwakeningMaterialCostForRank(int targetRank)
+    {
+        return DefaultAwakeningMaterialCostPerRank * Mathf.Max(1, targetRank);
     }
 
     // ---------------------------------------------------------------------
@@ -103,6 +131,12 @@ public static class HeroProgression
     /// <summary>Prototype starting skill materials.</summary>
     public const int StartingSkillMaterials = 50;
 
+    /// <summary>Prototype starting Awakening Materials (awakening is material-driven now).</summary>
+    public const int StartingAwakeningMaterials = 50;
+
+    /// <summary>Prototype starting Hero Tokens (earned from extra duplicates past C6).</summary>
+    public const int StartingHeroTokens = 0;
+
     // ---------------------------------------------------------------------
     // Default awakening steps
     // ---------------------------------------------------------------------
@@ -114,8 +148,8 @@ public static class HeroProgression
     /// The shared fallback awakening configuration for heroes without
     /// authored <see cref="HeroData.awakeningSteps"/>: six ranks, each
     /// granting +4% attack, +4% health, +2% defense and +1% speed, with the
-    /// default soul costs (10 x rank). A development warning is logged once
-    /// per hero so missing authored data stays visible.
+    /// default material costs (10 x rank). A development warning is logged
+    /// once per hero so missing authored data stays visible.
     /// </summary>
     public static AwakeningStep[] DefaultAwakeningSteps(HeroData forHero)
     {
@@ -135,7 +169,7 @@ public static class HeroProgression
             {
                 displayName = "Awakening " + numerals[i],
                 description = "+4% ATK, +4% HP, +2% DEF, +1% SPD",
-                requiredSouls = 0, // 0 = SoulCostForRank (10 x rank)
+                requiredAwakeningMaterials = 0, // 0 = AwakeningMaterialCostForRank (10 x rank)
                 healthBonusPercent = 4f,
                 attackBonusPercent = 4f,
                 defenseBonusPercent = 2f,
@@ -145,5 +179,128 @@ public static class HeroProgression
         }
 
         return steps;
+    }
+
+    // ---------------------------------------------------------------------
+    // Default constellation steps
+    // ---------------------------------------------------------------------
+
+    /// <summary>Heroes whose constellation steps have not been authored yet (logged once).</summary>
+    private static readonly HashSet<string> heroesUsingDefaultConstellationSteps = new HashSet<string>();
+
+    /// <summary>
+    /// The shared fallback constellation configuration for heroes without
+    /// authored <see cref="HeroData.constellationSteps"/>: six placeholder
+    /// steps (C1-C6) whose descriptions are generated from the hero's own
+    /// skill kit, mirroring the design sketch for Kael Stormblade (C1
+    /// skill damage, C2 additional effect, C3 skill level, C4 defense
+    /// ignore, C5 second skill/passive, C6 core enhancement). These are
+    /// PLACEHOLDER DESIGN VALUES - effect data only; no combat code
+    /// consumes them yet. A development warning is logged once per hero so
+    /// missing authored data stays visible; author constellation steps on
+    /// the HeroData asset to give a hero unique effects.
+    /// </summary>
+    public static ConstellationStep[] DefaultConstellationSteps(HeroData forHero)
+    {
+        string heroId = forHero != null ? forHero.HeroId : "unknown";
+        if (heroesUsingDefaultConstellationSteps.Add(heroId))
+        {
+            Debug.LogWarning("HeroProgression: '" + heroId + "' has no authored constellationSteps; " +
+                "using the shared default steps (placeholder effects generated from the hero's kit). " +
+                "Assign constellation steps on the HeroData asset to customize.");
+        }
+
+        SkillData primarySkill = FirstSkill(forHero, 0);
+        SkillData secondarySkill = FirstSkill(forHero, 1);
+        string primaryName = SkillDisplayName(primarySkill);
+        string secondaryName = SkillDisplayName(secondarySkill);
+
+        ConstellationStep[] steps = new ConstellationStep[MaxConstellationRank];
+        for (int i = 0; i < steps.Length; i++)
+        {
+            steps[i] = new ConstellationStep
+            {
+                displayName = ConstellationLabel(i + 1),
+                effectType = "none",
+                targetSkillId = string.Empty,
+                effectValue = 0f,
+            };
+        }
+
+        // C1: the primary skill deals increased damage.
+        steps[0].effectType = "skillDamage";
+        steps[0].targetSkillId = primarySkill != null ? primarySkill.SkillId : string.Empty;
+        steps[0].effectValue = 0.25f;
+        steps[0].description = primaryName + " deals 25% increased damage";
+
+        // C2: the primary skill gains an additional effect.
+        steps[1].effectType = "addEffect";
+        steps[1].targetSkillId = steps[0].targetSkillId;
+        steps[1].description = primaryName + " gains an additional effect";
+
+        // C3: the primary skill's level increases by 2.
+        steps[2].effectType = "skillLevel";
+        steps[2].targetSkillId = steps[0].targetSkillId;
+        steps[2].effectValue = 2f;
+        steps[2].description = primaryName + " skill level +2";
+
+        // C4: the primary skill partially ignores enemy DEF.
+        steps[3].effectType = "defenseIgnore";
+        steps[3].targetSkillId = steps[0].targetSkillId;
+        steps[3].effectValue = 0.25f;
+        steps[3].description = primaryName + " partially ignores enemy DEF";
+
+        // C5: another relevant skill's level, or a passive for one-skill heroes.
+        if (secondarySkill != null)
+        {
+            steps[4].effectType = "skillLevel";
+            steps[4].targetSkillId = secondarySkill.SkillId;
+            steps[4].effectValue = 1f;
+            steps[4].description = secondaryName + " skill level +1";
+        }
+        else
+        {
+            steps[4].effectType = "passive";
+            steps[4].description = "Grants an enhanced passive effect";
+        }
+
+        // C6: a major enhancement to the hero's core mechanic.
+        steps[5].effectType = "coreEnhancement";
+        steps[5].description = "Major enhancement to this hero's core mechanic";
+
+        return steps;
+    }
+
+    /// <summary>The hero's nth non-null kit skill (null when the kit is shorter).</summary>
+    private static SkillData FirstSkill(HeroData forHero, int index)
+    {
+        if (forHero == null || forHero.skills == null)
+        {
+            return null;
+        }
+
+        int seen = 0;
+        foreach (SkillData skill in forHero.skills)
+        {
+            if (skill == null)
+            {
+                continue;
+            }
+
+            if (seen == index)
+            {
+                return skill;
+            }
+
+            seen++;
+        }
+
+        return null;
+    }
+
+    /// <summary>A skill's display name for generated placeholder text.</summary>
+    private static string SkillDisplayName(SkillData skill)
+    {
+        return skill != null && !string.IsNullOrEmpty(skill.skillName) ? skill.skillName : "The hero's skill";
     }
 }
