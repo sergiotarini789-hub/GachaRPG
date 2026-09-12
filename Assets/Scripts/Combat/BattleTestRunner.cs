@@ -51,6 +51,13 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     public int teamOneBonusExperience = 0;
 
+    /// <summary>
+    /// When true (default), Play mode opens the runtime main menu and the
+    /// battle starts from its BATTLE button (see StartBattleFromMenu).
+    /// Uncheck to run the battle immediately on Play, exactly as before.
+    /// </summary>
+    public bool startWithMainMenu = true;
+
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
 
@@ -80,6 +87,12 @@ public class BattleTestRunner : MonoBehaviour
 
     /// <summary>The Canvas HUD this runner spawned; kept so the coroutines can tell it who is acting (presentation only).</summary>
     private BattleHud hud;
+
+    /// <summary>The runtime main menu, shown when startWithMainMenu is set; battles are started from its BATTLE button.</summary>
+    private MainMenu menu;
+
+    /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
+    private bool battleRunning;
 
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
@@ -126,9 +139,40 @@ public class BattleTestRunner : MonoBehaviour
 
     private void Start()
     {
-        // The Canvas HUD builds itself entirely from code, so the scene needs
-        // no manual UI hierarchy; the runner owns its creation.
+        if (startWithMainMenu)
+        {
+            // The runtime main menu is the entry point; the battle starts
+            // from its BATTLE button (see StartBattleFromMenu).
+            menu = MainMenu.Create(this);
+            return;
+        }
+
+        // Direct-battle mode: identical to the original flow.
         hud = BattleHud.Create(this);
+        StartCoroutine(RunTeamBattleRoutine());
+    }
+
+    /// <summary>
+    /// Starts the 3v3 battle from the main menu's BATTLE button: hides the
+    /// menu, builds the HUD once, and runs the exact same routine as always -
+    /// no combat behavior changes. Ignored while a battle is still running.
+    /// </summary>
+    public void StartBattleFromMenu()
+    {
+        if (battleRunning)
+        {
+            return;
+        }
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(false);
+        }
+
+        if (hud == null)
+        {
+            hud = BattleHud.Create(this);
+        }
 
         StartCoroutine(RunTeamBattleRoutine());
     }
@@ -266,12 +310,20 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     public IEnumerator RunTeamBattleRoutine()
     {
+        battleRunning = true;
+
         bool heroKit = attackHeroData != null && defenseHeroData != null && supportHeroData != null;
         if (!heroKit && (hero1Data == null || hero2Data == null))
         {
             Debug.LogWarning("BattleTestRunner: assign both HeroData assets in the Inspector before starting the battle.");
             battleEnded = true;
             winnerName = "Nobody";
+            battleRunning = false;
+            if (menu != null)
+            {
+                menu.gameObject.SetActive(true);
+            }
+
             yield break;
         }
 
@@ -366,6 +418,16 @@ public class BattleTestRunner : MonoBehaviour
         else
         {
             Debug.Log($"{winnerName} wins the battle!");
+        }
+
+        battleRunning = false;
+
+        // Return to the main menu so the whole flow (menu -> battle -> menu)
+        // can be replayed within one Play session; the result banner stays
+        // behind the menu canvas, which sorts above the HUD.
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(true);
         }
     }
 
