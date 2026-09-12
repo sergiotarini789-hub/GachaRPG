@@ -1,0 +1,61 @@
+name: Unity Build
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: unity-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: self-hosted
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Find Unity
+        shell: powershell
+        run: |
+          $unity = Get-ChildItem "C:\Program Files\Unity\Hub\Editor" -Filter "Unity.exe" -Recurse |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+
+          if (-not $unity) {
+            Write-Error "Unity.exe not found"
+            exit 1
+          }
+
+          echo "UNITY_PATH=$($unity.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Using Unity: $($unity.FullName)"
+
+      - name: Build Windows
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "Build\Windows" | Out-Null
+
+          & "$env:UNITY_PATH" `
+            -batchmode `
+            -nographics `
+            -quit `
+            -projectPath "$env:GITHUB_WORKSPACE" `
+            -buildTarget Win64 `
+            -buildWindows64Player "$env:GITHUB_WORKSPACE\Build\Windows\GachaRPG.exe"
+
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Unity build failed"
+            exit $LASTEXITCODE
+          }
+
+      - name: Upload Build
+        uses: actions/upload-artifact@v4
+        with:
+          name: GachaRPG-Windows
+          path: Build/Windows/
+          if-no-files-found: error
