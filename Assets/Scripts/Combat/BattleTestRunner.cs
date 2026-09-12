@@ -78,6 +78,9 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>The running 3v3 battle; drives turn selection and the victory check.</summary>
     private TeamBattle teamBattle;
 
+    /// <summary>The Canvas HUD this runner spawned; kept so the coroutines can tell it who is acting (presentation only).</summary>
+    private BattleHud hud;
+
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
 
@@ -125,7 +128,7 @@ public class BattleTestRunner : MonoBehaviour
     {
         // The Canvas HUD builds itself entirely from code, so the scene needs
         // no manual UI hierarchy; the runner owns its creation.
-        BattleHud.Create(this);
+        hud = BattleHud.Create(this);
 
         StartCoroutine(RunTeamBattleRoutine());
     }
@@ -178,6 +181,12 @@ public class BattleTestRunner : MonoBehaviour
             HeroInstance actor = turnManager.GetNextTurn();
             HeroInstance target = ReferenceEquals(actor, hero1) ? hero2 : hero1;
 
+            // Presentation only: highlight the acting hero in the HUD.
+            if (hud != null)
+            {
+                hud.SetActiveHero(actor);
+            }
+
             // Cooldowns recover at the start of the acting hero's turn.
             actor.TickCooldowns();
 
@@ -225,6 +234,11 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         battleEnded = true;
+        if (hud != null)
+        {
+            hud.SetActiveHero(null);
+        }
+
         if (!hero1.isAlive && !hero2.isAlive)
         {
             winnerName = "Nobody";
@@ -313,6 +327,12 @@ public class BattleTestRunner : MonoBehaviour
                 break;
             }
 
+            // Presentation only: highlight the acting hero in the HUD.
+            if (hud != null)
+            {
+                hud.SetActiveHero(actor);
+            }
+
             string battleEvent = teamBattle.PerformTurn(actor);
             if (battleEvent != null)
             {
@@ -321,6 +341,11 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         battleEnded = true;
+        if (hud != null)
+        {
+            hud.SetActiveHero(null);
+        }
+
         if (ReferenceEquals(teamBattle.Winner, team1))
         {
             winnerName = "Team 1";
