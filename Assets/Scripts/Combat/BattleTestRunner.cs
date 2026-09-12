@@ -61,7 +61,7 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Hard cap on 1v1 loop iterations so a battle can never hang Play mode.</summary>
     private const int MaxTurns = 100;
 
-    /// <summary>Real-time seconds to pause between turns so the fight is watchable.</summary>
+    /// <summary>Real-time seconds between turns at x1 speed so the fight is watchable; the battle speed multiplier divides this at runtime.</summary>
     private const float SecondsPerTurn = 1f;
 
     /// <summary>
@@ -100,6 +100,9 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>True while the battle is paused through the HUD's pause menu; freezes turn pacing without touching battle state.</summary>
     private bool battlePaused;
 
+    /// <summary>Current battle speed multiplier (1, 2, or 3); divides the per-turn delay so x2/x3 play the same turns faster. Combat itself is untouched.</summary>
+    private int battleSpeed = 1;
+
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
 
@@ -132,6 +135,9 @@ public class BattleTestRunner : MonoBehaviour
 
     /// <summary>True once the battle finished (win, draw, or safety limit).</summary>
     public bool BattleEnded => battleEnded;
+
+    /// <summary>Current battle speed multiplier (1-3); the HUD's SPEED toggle reads and cycles this.</summary>
+    public int BattleSpeed => battleSpeed;
 
     /// <summary>Winner shown in the end banner: "Team 1", "Team 2", or "Nobody" on a draw.</summary>
     public string WinnerName => winnerName;
@@ -196,6 +202,20 @@ public class BattleTestRunner : MonoBehaviour
     {
         battlePaused = paused;
         Time.timeScale = paused ? 0f : 1f;
+    }
+
+    /// <summary>
+    /// Sets the battle speed multiplier (clamped to 1-3). The per-turn delay
+    /// becomes <see cref="SecondsPerTurn"/> divided by the multiplier, so x2
+    /// and x3 run the exact same turn sequence two or three times faster in
+    /// real time - turn order, damage, healing, cooldowns, and results are
+    /// identical at every speed. An in-flight wait keeps its original
+    /// duration; the new speed applies from the next turn. Safe to call
+    /// mid-battle.
+    /// </summary>
+    public void SetBattleSpeed(int multiplier)
+    {
+        battleSpeed = Mathf.Clamp(multiplier, 1, 3);
     }
 
     /// <summary>
@@ -278,12 +298,14 @@ public class BattleTestRunner : MonoBehaviour
         battleLog.Clear();
         battleEnded = false;
         winnerName = string.Empty;
+        battleSpeed = 1;
 
         int turnCount = 0;
         while (hero1.isAlive && hero2.isAlive && turnCount < MaxTurns)
         {
-            // One-second breather between turns so the fight unfolds visibly.
-            yield return new WaitForSeconds(SecondsPerTurn);
+            // Per-turn breather at the current speed (the x1 interval
+            // divided by the multiplier) so the fight unfolds visibly.
+            yield return new WaitForSeconds(SecondsPerTurn / battleSpeed);
 
             HeroInstance actor = turnManager.GetNextTurn();
             HeroInstance target = ReferenceEquals(actor, hero1) ? hero2 : hero1;
@@ -430,11 +452,14 @@ public class BattleTestRunner : MonoBehaviour
         battleLog.Clear();
         battleEnded = false;
         winnerName = string.Empty;
+        battleSpeed = 1; // every battle starts at x1; the HUD resyncs its SPEED toggle
 
         while (!teamBattle.BattleOver)
         {
-            // One-second breather between turns so the fight unfolds visibly.
-            yield return new WaitForSeconds(SecondsPerTurn);
+            // Per-turn breather at the current speed (the x1 interval
+            // divided by the multiplier) so the fight unfolds visibly;
+            // pausing still freezes this wait mid-flight via Time.timeScale.
+            yield return new WaitForSeconds(SecondsPerTurn / battleSpeed);
 
             // Pause gate: while the HUD's pause menu is open, hold here
             // without resolving a turn. Pausing also sets Time.timeScale to

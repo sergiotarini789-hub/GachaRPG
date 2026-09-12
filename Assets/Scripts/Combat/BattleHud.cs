@@ -21,8 +21,9 @@ using UnityEngine.UI;
 /// - a compact battle log strip at the top-center showing the
 ///   <see cref="BattleTestRunner.MaxLogEntries"/> most recent events;
 /// - a bottom action bar: the currently acting hero, a basic-attack slot,
-///   three skill slots fed from the acting hero's kit, and AUTO / SPEED
-///   placeholder toggles (visual only - they drive no combat logic);
+///   three skill slots fed from the acting hero's kit, an AUTO placeholder
+///   toggle, and a real SPEED x1/x2/x3 toggle that cycles the runner's
+///   battle speed (turn pacing only - never combat math);
 /// - a centered result banner, hidden until the battle ends: "Victory!" when
 ///   team 1 wins, "Defeat!" when team 2 wins, "Draw!" when nobody does;
 /// - a PAUSE button beside the battle log: it freezes the battle (turn
@@ -372,14 +373,14 @@ public class BattleHud : MonoBehaviour
     /// <summary>Whether the AUTO placeholder toggle is switched on (visual state only).</summary>
     private bool autoOn;
 
-    /// <summary>SPEED toggle label (visual placeholder only).</summary>
+    /// <summary>SPEED toggle label; always shows the active multiplier (SPEED x1/x2/x3).</summary>
     private Text speedLabel;
 
-    /// <summary>SPEED toggle background (visual placeholder only).</summary>
+    /// <summary>SPEED toggle background; brightens as the multiplier rises.</summary>
     private Image speedImage;
 
-    /// <summary>Whether the SPEED placeholder toggle is switched on (visual state only).</summary>
-    private bool speedOn;
+    /// <summary>Last speed multiplier applied to the toggle visuals; resyncs from the runner so a new battle resets to x1.</summary>
+    private int cachedSpeedMode = 1;
 
     /// <summary>Whether the action bar has drawn once; gates the full redraw to acting-hero changes.</summary>
     private bool actionBarDrawn;
@@ -519,6 +520,7 @@ public class BattleHud : MonoBehaviour
         RefreshLog();
         RefreshBanner();
         RefreshPauseButton();
+        RefreshSpeedToggle();
         RefreshActionBar();
     }
 
@@ -830,8 +832,10 @@ public class BattleHud : MonoBehaviour
     /// <summary>
     /// Builds the bottom action bar: the acting hero's summary on the left,
     /// the basic-attack square plus three skill squares in the middle, and
-    /// the AUTO / SPEED placeholder toggles on the right. Nothing here drives
-    /// combat; skill squares only read the acting hero's kit and readiness.
+    /// an AUTO placeholder toggle plus the real SPEED x1/x2/x3 control on
+    /// the right. Nothing here drives combat math; skill squares only read
+    /// the acting hero's kit and readiness, and SPEED only scales the
+    /// runner's turn pacing.
     /// </summary>
     private void BuildActionBar(RectTransform root)
     {
@@ -891,12 +895,12 @@ public class BattleHud : MonoBehaviour
             skillSlots[i] = new ActionSlotView(this, barRect, "SkillSlot" + (i + 1), -229f + ActionSlotSize + 14f + i * (ActionSlotSize + 14f));
         }
 
-        // ---- Placeholder toggles (right): AUTO and SPEED ----
+        // ---- Toggles (right): AUTO placeholder + the real SPEED control ----
         BuildToggle(barRect, "AutoToggle", out autoImage, out autoLabel, -84f, "AUTO", OnAutoClicked);
         BuildToggle(barRect, "SpeedToggle", out speedImage, out speedLabel, -16f, "SPEED x1", OnSpeedClicked);
     }
 
-    /// <summary>Creates one placeholder toggle button (rounded panel + bold label); the click only flips a visual state.</summary>
+    /// <summary>Creates one toggle button (rounded panel + bold label) wired to its click handler.</summary>
     private void BuildToggle(RectTransform bar, string name, out Image image, out Text label, float yOffset, string initial, UnityEngine.Events.UnityAction onClick)
     {
         RectTransform rect = CreateRect(bar, name);
@@ -930,13 +934,40 @@ public class BattleHud : MonoBehaviour
         autoImage.color = autoOn ? ActionSlotColor : ActionSlotDimColor;
     }
 
-    /// <summary>SPEED placeholder click: flips the visual toggle only; battle pacing stays as configured.</summary>
+    /// <summary>
+    /// SPEED click: cycles the runner's battle speed x1 -&gt; x2 -&gt; x3 -&gt; x1.
+    /// The multiplier only divides the runner's per-turn delay - combat
+    /// math, turn order, and results are identical at every speed.
+    /// </summary>
     private void OnSpeedClicked()
     {
-        speedOn = !speedOn;
-        speedLabel.text = speedOn ? "SPEED x2" : "SPEED x1";
-        speedLabel.color = speedOn ? PlayerAccent : Color.white;
-        speedImage.color = speedOn ? ActionSlotColor : ActionSlotDimColor;
+        if (runner == null)
+        {
+            return;
+        }
+
+        int next = runner.BattleSpeed % 3 + 1;
+        runner.SetBattleSpeed(next);
+        ApplySpeedVisual(next);
+    }
+
+    /// <summary>Applies the active multiplier to the toggle visuals: the label always matches, the backing brightens at x2/x3.</summary>
+    private void ApplySpeedVisual(int multiplier)
+    {
+        cachedSpeedMode = multiplier;
+        speedLabel.text = "SPEED x" + multiplier;
+        speedLabel.color = multiplier > 1 ? PlayerAccent : Color.white;
+        speedImage.color = multiplier == 1 ? ActionSlotDimColor : multiplier == 2 ? ActionSlotColor : ActionSlotReadyColor;
+    }
+
+    /// <summary>Keeps the toggle in sync with the runner: a fresh battle resets the runner to x1, flipping the label back.</summary>
+    private void RefreshSpeedToggle()
+    {
+        int mode = runner != null ? runner.BattleSpeed : 1;
+        if (mode != cachedSpeedMode)
+        {
+            ApplySpeedVisual(mode);
+        }
     }
 
     /// <summary>
