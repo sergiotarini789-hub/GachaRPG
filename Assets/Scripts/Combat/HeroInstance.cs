@@ -4,11 +4,18 @@ using UnityEngine;
 
 /// <summary>
 /// Plain C# class representing one owned hero at runtime, instantiated from
-/// a <see cref="HeroData"/> template. Owns the hero's progression state -
-/// level and experience - and derives its combat stats from the template's
-/// base stats plus its <see cref="HeroGrowth"/> curve (see
-/// <see cref="CalculateCurrentStats"/>). The template asset never changes:
-/// leveling mutates only this instance.
+/// a <see cref="HeroData"/> template. Owns ALL of the hero's progression
+/// state - level, experience, ascension rank, awakening rank, Hero Souls,
+/// and per-skill levels - and derives its combat stats from the template's
+/// base stats plus its <see cref="HeroGrowth"/> curve and the ascension /
+/// awakening modifiers (see <see cref="CalculateCurrentStats"/>). The
+/// template asset never changes: progression mutates only this instance.
+///
+/// The effective maximum level is ascension-controlled (see
+/// <see cref="MaxLevel"/>); duplicate summons of the same template become
+/// Hero Souls banked here and are spent on awakening. Battles consume
+/// <see cref="CreateCombatClone"/> copies so combat mutations (health,
+/// cooldowns) never dirty the roster's authoritative progression.
 ///
 /// Also tracks live battle values (health, cooldowns) and an
 /// <see cref="isAlive"/> flag used by systems such as <see cref="TurnManager"/>
@@ -54,6 +61,21 @@ public class HeroInstance
     /// <summary>Turns remaining before each tracked skill is usable again. Skills not in the map are ready.</summary>
     private Dictionary<SkillData, int> cooldownTracker;
 
+    /// <summary>Level of each kit skill (missing entries are level 1); scales the skill's effect power.</summary>
+    private readonly Dictionary<SkillData, int> skillLevels = new Dictionary<SkillData, int>();
+
+    /// <summary>Ascension rank (0..HeroProgression.MaxAscensionRank); raises the level cap and adds stat bonuses.</summary>
+    private int ascensionRank;
+
+    /// <summary>Awakening rank (0..awakeningSteps.Length); each reached rank applies its step's stat bonuses.</summary>
+    private int awakeningRank;
+
+    /// <summary>Hero Souls banked from duplicate summons; spent on awakening.</summary>
+    private int souls;
+
+    /// <summary>This instance's resolved awakening steps (authored per-hero data, or the shared defaults).</summary>
+    private readonly AwakeningStep[] awakeningSteps;
+
     /// <summary>
     /// The hero's current level, from 1 up to <see cref="MaxLevel"/>. Changes
     /// only through <see cref="LevelUp"/> - levels are never lost.
@@ -67,10 +89,24 @@ public class HeroInstance
     public int Experience { get; private set; }
 
     /// <summary>
-    /// The highest level this hero can reach, from the template's growth
-    /// curve (guarded to at least 1 so bad data can never yield level 0).
+    /// The highest level this hero can currently reach: the ascension
+    /// rank's cap, limited by the template's own growth curve (a hero never
+    /// outgrows its authored curve). Ascending raises this over time.
     /// </summary>
-    public int MaxLevel => Mathf.Max(1, data.growth.maxLevel);
+    public int MaxLevel => Mathf.Clamp(
+        HeroProgression.AscensionMaxLevel(ascensionRank), 1, Mathf.Max(1, data.growth.maxLevel));
+
+    /// <summary>Current ascension rank; each rank raises <see cref="MaxLevel"/> and grants stat bonuses.</summary>
+    public int Ascension => ascensionRank;
+
+    /// <summary>Current awakening rank; each rank applies its step's stat bonuses.</summary>
+    public int Awakening => awakeningRank;
+
+    /// <summary>Banked Hero Souls (from duplicate summons); spent on awakening.</summary>
+    public int Souls => souls;
+
+    /// <summary>The highest awakening rank this hero can reach (0 when no steps exist).</summary>
+    public int MaxAwakeningRank => awakeningSteps.Length;
 
     /// <summary>Whether the hero has reached <see cref="MaxLevel"/>.</summary>
     public bool IsMaxLevel => Level >= MaxLevel;
@@ -128,6 +164,12 @@ public class HeroInstance
 
         cooldownTracker = new Dictionary<SkillData, int>();
 
+        // Resolve the awakening configuration once: authored per-hero steps,
+        // or the shared defaults (which log a development warning).
+        awakeningSteps = data.awakeningSteps != null && data.awakeningSteps.Count > 0
+            ? data.awakeningSteps.ToArray()
+            : HeroProgression.DefaultAwakeningSteps(data);
+
         CalculateCurrentStats();
         currentHealth = maxHealth;
     }
@@ -182,24 +224,64 @@ public class HeroInstance
     }
 
     /// <summary>
-    /// Recomputes current stats from the template: each stat is its base
-    /// value plus the growth curve's per-level gain times the levels gained
-    /// above level 1, rounded to the nearest integer. Current health is
-    /// clamped to the new maximum, so gaining a level never reduces health.
+    /// Recomputes current stats through the single modifier pipeline:
+    /// base + per-level growth (exactly as before), then multiplied by the
+    /// ascension bonus (per rank) and the accumulated awakening bonuses
+    /// (per reached rank). Future modifiers (equipment, weapons, artifacts,
+    /// buffs) extend this same method. With no ascension and no awakening
+    /// the values are identical to the raw growth-curve results. Current
+    /// health is clamped to the new maximum, so gaining progression never
+    /// reduces health.
     /// </summary>
     public void CalculateCurrentStats()
     {
         HeroGrowth growth = data.growth;
         int levelsGained = Level - 1;
 
-        maxHealth = data.baseHealth + Mathf.RoundToInt(growth.healthPerLevel * levelsGained);
-        currentAttack = data.baseAttack + Mathf.RoundToInt(growth.attackPerLevel * levelsGained);
-        currentDefense = data.baseDefense + Mathf.RoundToInt(growth.defensePerLevel * levelsGained);
-        currentSpeed = data.baseSpeed + Mathf.RoundToInt(growth.speedPerLevel * levelsGained);
+        // Level modifier: base + growth (unchanged from the original formula).
+        int health = data.baseHealth + Mathf.RoundToInt(growth.healthPerLevel * levelsGained);
+        int attack = data.baseAttack + Mathf.RoundToInt(growth.attackPerLevel * levelsGained);
+        int defense = data.baseDefense + Mathf.RoundToInt(growth.defensePerLevel * levelsGained);
+        int speed = data.baseSpeed + Mathf.RoundToInt(growth.speedPerLevel * levelsGained);
+
+        // Ascension modifier: +StatBonusPercentPerAscension per rank.
+        float ascensionMultiplier = 1f + HeroProgression.StatBonusPercentPerAscension * 0.01f * ascensionRank;
+
+        // Awakening modifier: the summed percent bonuses of every reached rank.
+        GetAwakeningBonuses(out float healthBonus, out float attackBonus, out float defenseBonus, out float speedBonus);
+
+        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + healthBonus * 0.01f)));
+        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + attackBonus * 0.01f)));
+        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + defenseBonus * 0.01f)));
+        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + speedBonus * 0.01f)));
 
         if (currentHealth > maxHealth)
         {
             currentHealth = maxHealth;
+        }
+    }
+
+    /// <summary>Sums the stat bonuses of every reached awakening rank (percent values).</summary>
+    private void GetAwakeningBonuses(out float health, out float attack, out float defense, out float speed)
+    {
+        health = 0f;
+        attack = 0f;
+        defense = 0f;
+        speed = 0f;
+
+        int ranks = Mathf.Min(awakeningRank, awakeningSteps.Length);
+        for (int i = 0; i < ranks; i++)
+        {
+            AwakeningStep step = awakeningSteps[i];
+            if (step == null)
+            {
+                continue;
+            }
+
+            health += step.healthBonusPercent;
+            attack += step.attackBonusPercent;
+            defense += step.defenseBonusPercent;
+            speed += step.speedBonusPercent;
         }
     }
 
@@ -260,5 +342,322 @@ public class HeroInstance
         {
             cooldownTracker[skill] = Math.Max(0, cooldownTracker[skill] - 1);
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // Hero Souls & Awakening (souls come from duplicate summons).
+    // ---------------------------------------------------------------------
+
+    /// <summary>Adds Hero Souls (duplicate summons, development tools). Negative amounts are ignored.</summary>
+    public void AddSouls(int amount)
+    {
+        if (amount > 0)
+        {
+            souls += amount;
+        }
+    }
+
+    /// <summary>The next awakening rank's configuration, or null at (or without) the cap.</summary>
+    public AwakeningStep NextAwakeningStep()
+    {
+        return awakeningRank < awakeningSteps.Length ? awakeningSteps[awakeningRank] : null;
+    }
+
+    /// <summary>The soul cost of awakening to the given 1-based rank: the step's override, or the default (10 x rank).</summary>
+    public int AwakeningSoulCost(int targetRank)
+    {
+        if (awakeningSteps.Length == 0)
+        {
+            return int.MaxValue; // never affordable when no steps exist
+        }
+
+        int index = Mathf.Clamp(targetRank, 1, awakeningSteps.Length) - 1;
+        AwakeningStep step = awakeningSteps[index];
+        return step != null && step.requiredSouls > 0
+            ? step.requiredSouls
+            : HeroProgression.SoulCostForRank(targetRank);
+    }
+
+    /// <summary>
+    /// Whether the hero can awaken right now: a next rank must exist and
+    /// enough souls must be banked. The reason describes what is missing.
+    /// </summary>
+    public bool CanAwaken(out string reason)
+    {
+        if (awakeningSteps.Length == 0)
+        {
+            reason = "no awakening configured for this hero";
+            return false;
+        }
+
+        if (awakeningRank >= awakeningSteps.Length)
+        {
+            reason = "maximum awakening reached";
+            return false;
+        }
+
+        int cost = AwakeningSoulCost(awakeningRank + 1);
+        if (souls < cost)
+        {
+            reason = souls + " / " + cost + " souls";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Awakens to the next rank: consumes the rank's soul cost, raises the
+    /// rank, and recalculates stats. Refuses (returns false, changes
+    /// nothing) when <see cref="CanAwaken"/> fails; souls never go negative.
+    /// </summary>
+    public bool Awaken()
+    {
+        if (!CanAwaken(out _))
+        {
+            return false;
+        }
+
+        souls -= AwakeningSoulCost(awakeningRank + 1);
+        awakeningRank++;
+        CalculateCurrentStats();
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Ascension (raises the level cap; costs wallet resources).
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Whether the hero can ascend right now: below the maximum rank, at
+    /// the current level cap, and with the wallet covering the rank's gold
+    /// and ascension material cost. The reason describes what blocks it.
+    /// </summary>
+    public bool CanAscend(PlayerWallet wallet, out string reason)
+    {
+        if (ascensionRank >= HeroProgression.MaxAscensionRank)
+        {
+            reason = "maximum ascension reached";
+            return false;
+        }
+
+        int requiredLevel = HeroProgression.AscensionMaxLevel(ascensionRank);
+        if (Level < requiredLevel)
+        {
+            reason = "requires level " + requiredLevel;
+            return false;
+        }
+
+        int gold = HeroProgression.AscensionGoldCost(ascensionRank + 1);
+        int materials = HeroProgression.AscensionMaterialCost(ascensionRank + 1);
+        if (wallet == null || !wallet.CanAfford(gold, materials, 0))
+        {
+            reason = "costs " + gold + " gold + " + materials + " ascension materials";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Ascends to the next rank: consumes the costs, raises the rank (which
+    /// raises <see cref="MaxLevel"/>), and recalculates stats. Refuses
+    /// (returns false, changes nothing - including the wallet) when
+    /// <see cref="CanAscend"/> fails.
+    /// </summary>
+    public bool Ascend(PlayerWallet wallet)
+    {
+        if (!CanAscend(wallet, out _))
+        {
+            return false;
+        }
+
+        wallet.TryConsume(
+            HeroProgression.AscensionGoldCost(ascensionRank + 1),
+            HeroProgression.AscensionMaterialCost(ascensionRank + 1),
+            0);
+        ascensionRank++;
+        CalculateCurrentStats();
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Skill progression (levels live here; the effect scales through
+    // GetSkillMultiplier, which the existing combat engine consumes).
+    // ---------------------------------------------------------------------
+
+    /// <summary>The skill's current level on this hero (missing entries are level 1).</summary>
+    public int GetSkillLevel(SkillData skill)
+    {
+        int level;
+        return skill != null && skillLevels.TryGetValue(skill, out level) ? Mathf.Max(1, level) : 1;
+    }
+
+    /// <summary>The skill's maximum level from its data.</summary>
+    public int GetSkillMaxLevel(SkillData skill)
+    {
+        return skill != null ? Mathf.Max(1, skill.maxSkillLevel) : 1;
+    }
+
+    /// <summary>
+    /// The skill's effective effect power at this hero's current skill
+    /// level: damageMultiplier + levelMultiplierStep x (level - 1). At
+    /// level 1 this equals the skill's authored multiplier exactly.
+    /// </summary>
+    public float GetSkillMultiplier(SkillData skill)
+    {
+        if (skill == null)
+        {
+            return 1f;
+        }
+
+        return skill.damageMultiplier + skill.levelMultiplierStep * (GetSkillLevel(skill) - 1);
+    }
+
+    /// <summary>
+    /// Whether the skill can be upgraded right now: below its max level and
+    /// the wallet covers the gold + skill material cost (per-skill cost
+    /// fields times the current level).
+    /// </summary>
+    public bool CanUpgradeSkill(SkillData skill, PlayerWallet wallet, out string reason)
+    {
+        if (skill == null)
+        {
+            reason = "no skill";
+            return false;
+        }
+
+        int level = GetSkillLevel(skill);
+        if (level >= GetSkillMaxLevel(skill))
+        {
+            reason = "skill at max level";
+            return false;
+        }
+
+        int gold = skill.upgradeGoldCost * level;
+        int materials = skill.upgradeMaterialCost * level;
+        if (wallet == null || !wallet.CanAfford(gold, 0, materials))
+        {
+            reason = "costs " + gold + " gold + " + materials + " skill materials";
+            return false;
+        }
+
+        reason = string.Empty;
+        return true;
+    }
+
+    /// <summary>
+    /// Upgrades the skill one level: consumes the costs and raises the
+    /// level; effect power is read live at cast time, so no recalculation
+    /// is needed. Refuses (returns false) when <see cref="CanUpgradeSkill"/>
+    /// fails.
+    /// </summary>
+    public bool UpgradeSkill(SkillData skill, PlayerWallet wallet)
+    {
+        if (!CanUpgradeSkill(skill, wallet, out _))
+        {
+            return false;
+        }
+
+        int level = GetSkillLevel(skill);
+        wallet.TryConsume(skill.upgradeGoldCost * level, 0, skill.upgradeMaterialCost * level);
+        skillLevels[skill] = level + 1;
+        return true;
+    }
+
+    /// <summary>Restores a saved skill level (clamped to the skill's max); save/load support.</summary>
+    public void SetSkillLevel(SkillData skill, int level)
+    {
+        if (skill != null)
+        {
+            skillLevels[skill] = Mathf.Clamp(level, 1, GetSkillMaxLevel(skill));
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Battle & persistence support.
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Creates a battle-ready copy of this hero: the same template, level,
+    /// XP, ascension, awakening, souls, and skill levels, with freshly
+    /// calculated stats at full health. Battles mutate only the copy
+    /// (health, cooldowns), so the roster's authoritative progression is
+    /// never dirtied - the clone is re-derived from this instance at every
+    /// battle start, making the roster the single source of truth.
+    /// </summary>
+    public HeroInstance CreateCombatClone()
+    {
+        HeroInstance clone = new HeroInstance(data);
+        clone.displayName = displayName;
+        clone.Level = Level;
+        clone.experience = experience;
+        clone.ascensionRank = ascensionRank;
+        clone.awakeningRank = awakeningRank;
+        clone.souls = souls;
+        foreach (KeyValuePair<SkillData, int> pair in skillLevels)
+        {
+            clone.skillLevels[pair.Key] = pair.Value;
+        }
+
+        clone.CalculateCurrentStats();
+        clone.currentHealth = clone.maxHealth;
+        return clone;
+    }
+
+    /// <summary>
+    /// Restores progression from a save: ranks are clamped to their valid
+    /// ranges, unknown skills keep level 1, level is clamped to the
+    /// effective cap, and stats are recalculated at full health. Safe
+    /// defaults (fresh hero) apply for missing fields.
+    /// </summary>
+    public void ApplySavedProgression(SavedHero saved)
+    {
+        if (saved == null)
+        {
+            return;
+        }
+
+        ascensionRank = Mathf.Clamp(saved.ascension, 0, HeroProgression.MaxAscensionRank);
+        awakeningRank = Mathf.Clamp(saved.awakening, 0, awakeningSteps.Length);
+        souls = Mathf.Max(0, saved.souls);
+        Level = Mathf.Clamp(saved.level, 1, MaxLevel);
+        experience = IsMaxLevel ? 0 : Mathf.Max(0, saved.experience);
+
+        if (saved.skillIds != null && saved.skillLevels != null && skills != null)
+        {
+            for (int i = 0; i < saved.skillIds.Length && i < saved.skillLevels.Length; i++)
+            {
+                foreach (SkillData skill in skills)
+                {
+                    if (skill != null && skill.SkillId == saved.skillIds[i])
+                    {
+                        SetSkillLevel(skill, saved.skillLevels[i]);
+                        break;
+                    }
+                }
+            }
+        }
+
+        CalculateCurrentStats();
+        currentHealth = maxHealth;
+    }
+
+    /// <summary>
+    /// Development-only reset: wipes this hero back to a fresh level-1
+    /// state (no XP, no ranks, no souls, all skills level 1).
+    /// </summary>
+    public void ResetProgression()
+    {
+        Level = 1;
+        experience = 0;
+        ascensionRank = 0;
+        awakeningRank = 0;
+        souls = 0;
+        skillLevels.Clear();
+        CalculateCurrentStats();
+        currentHealth = maxHealth;
     }
 }

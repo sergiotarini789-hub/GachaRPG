@@ -33,4 +33,29 @@ public class SkillData : ScriptableObject
     /// <summary>Designer notes / tooltip text.</summary>
     [TextArea]
     public string description;
+
+    /// <summary>
+    /// Highest level this skill can reach; 1 = no upgrades available.
+    /// Skill levels are per-hero state on <see cref="HeroInstance"/>.
+    /// </summary>
+    public int maxSkillLevel = 5;
+
+    /// <summary>
+    /// Effect power added per skill level above 1, applied linearly:
+    /// effective multiplier = damageMultiplier + levelMultiplierStep x
+    /// (level - 1). 0 keeps the skill's power flat at every level.
+    /// </summary>
+    public float levelMultiplierStep = 0.1f;
+
+    /// <summary>Gold cost per upgrade, multiplied by the skill's current level.</summary>
+    public int upgradeGoldCost = 100;
+
+    /// <summary>Skill material cost per upgrade, multiplied by the skill's current level.</summary>
+    public int upgradeMaterialCost = 1;
+
+    /// <summary>
+    /// The skill's stable identity for saves: the skill name (unique inside
+    /// each hero's kit).
+    /// </summary>
+    public string SkillId => string.IsNullOrEmpty(skillName) ? "skill" : skillName;
 }

@@ -39,6 +39,9 @@ public static class CombatManager
 
     /// <summary>
     /// Resolves one skill use, scaling with the attacker's currentAttack and
+    /// the skill's effective multiplier on the attacking hero (skill
+    /// progression raises it - see HeroInstance.GetSkillMultiplier; at
+    /// skill level 1 it equals the skill's authored damageMultiplier) and
     /// applying the skill's effect (SkillType) to the resolved target:
     /// Damage skills hit the target for (attack x multiplier - defense,
     /// minimum 1); Heal skills restore the target's health (capped at the
@@ -65,7 +68,7 @@ public static class CombatManager
             }
 
             string targetName = target.displayName;
-            int damage = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier) - target.currentDefense;
+            int damage = Mathf.RoundToInt(attacker.currentAttack * attacker.GetSkillMultiplier(skill)) - target.currentDefense;
             damage = Math.Max(1, damage);
             target.TakeDamage(damage);
 
@@ -82,7 +85,7 @@ public static class CombatManager
             }
 
             string targetName = target.displayName;
-            int healAmount = Mathf.RoundToInt(attacker.currentAttack * skill.damageMultiplier);
+            int healAmount = Mathf.RoundToInt(attacker.currentAttack * attacker.GetSkillMultiplier(skill));
             int healthBefore = target.currentHealth;
             target.Heal(healAmount);
 

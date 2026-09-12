@@ -162,6 +162,12 @@ public class SummonScreen : MonoBehaviour
     /// <summary>The rarity-odds panel; its rows are filled in <see cref="BuildOddsPanel"/>.</summary>
     private RectTransform oddsPanelRoot;
 
+    /// <summary>Result title: "NEW HERO!" or "DUPLICATE".</summary>
+    private Text resultTitle;
+
+    /// <summary>Result soul line ("+1 Kael Stormblade Soul (12 total)"); shown for duplicates only.</summary>
+    private Text resultSoulLine;
+
     /// <summary>Result fallback note ("rolled Common - pool empty, fell back to Rare"); hidden unless a fallback happened.</summary>
     private Text resultFallbackNote;
 
@@ -333,6 +339,9 @@ public class SummonScreen : MonoBehaviour
         }
 
         ShowResult(result);
+
+        // Duplicates banked souls and new heroes joined the roster - persist.
+        runner.SaveProfile();
     }
 
     /// <summary>
@@ -358,6 +367,17 @@ public class SummonScreen : MonoBehaviour
 
         HeroInstance hero = result.Hero;
         HeroData data = hero != null ? hero.data : null;
+
+        // New hero or duplicate: the title says which immediately; duplicates
+        // also show the soul gained and the new total.
+        resultTitle.text = result.IsNewHero ? "NEW HERO!" : "DUPLICATE";
+        resultSoulLine.gameObject.SetActive(!result.IsNewHero && data != null);
+        if (!result.IsNewHero && data != null)
+        {
+            resultSoulLine.text = "+" + HeroProgression.SoulsPerDuplicate + " " + data.heroName
+                + " Soul   (" + hero.Souls + " total)";
+        }
+
         if (data == null)
         {
             return;
@@ -553,68 +573,75 @@ public class SummonScreen : MonoBehaviour
     /// <summary>Builds the result panel's static elements; values are filled in <see cref="ShowResult"/>.</summary>
     private void BuildResultPanel(RectTransform panel)
     {
-        CreateText(panel, "Title", "SUMMONED!",
+        resultTitle = CreateText(panel, "Title", string.Empty,
             ResultTitleFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopCenter, TopCenter, new Vector2(0f, -26f), new Vector2(500f, 40f)).color = GoldAccent;
+            TopCenter, TopCenter, new Vector2(0f, -24f), new Vector2(500f, 40f));
+        resultTitle.color = GoldAccent;
+
+        resultSoulLine = CreateText(panel, "SoulLine", string.Empty,
+            ResultNoteFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            TopCenter, TopCenter, new Vector2(0f, -68f), new Vector2(700f, 26f));
+        resultSoulLine.color = GoldAccent;
+        resultSoulLine.gameObject.SetActive(false);
 
         resultFallbackNote = CreateText(panel, "FallbackNote", string.Empty,
             ResultNoteFontSize, FontStyle.Normal, TextAnchor.MiddleCenter,
-            TopCenter, TopCenter, new Vector2(0f, -66f), new Vector2(780f, 24f));
+            TopCenter, TopCenter, new Vector2(0f, -96f), new Vector2(780f, 20f));
         resultFallbackNote.color = DimTextColor;
         resultFallbackNote.gameObject.SetActive(false);
 
         // ---- Portrait (left) ----
         resultPortraitFrame = CreateSlicedImage(panel, "PortraitFrame", Color.white, frameSprite,
-            TopLeft, TopLeft, new Vector2(50f, -110f), new Vector2(ResultPortraitSize, ResultPortraitSize));
+            TopLeft, TopLeft, new Vector2(50f, -130f), new Vector2(ResultPortraitSize, ResultPortraitSize));
         CreateSlicedImage(panel, "PortraitBack", PortraitBackColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(58f, -118f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
+            TopLeft, TopLeft, new Vector2(58f, -138f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
 
         resultPortraitIcon = CreateSlicedImage(panel, "PortraitIcon", Color.white, null,
-            TopLeft, TopLeft, new Vector2(58f, -118f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
+            TopLeft, TopLeft, new Vector2(58f, -138f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
         resultPortraitIcon.preserveAspect = true;
         resultPortraitIcon.gameObject.SetActive(false);
 
         resultPortraitGlyph = CreateText(panel, "PortraitGlyph", "?",
             ResultPortraitFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(58f, -118f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
+            TopLeft, TopLeft, new Vector2(58f, -138f), new Vector2(ResultPortraitSize - 16f, ResultPortraitSize - 16f));
 
         // ---- Name, badges, stats (right of the portrait) ----
         resultName = CreateText(panel, "Name", string.Empty,
             ResultNameFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(230f, -112f), new Vector2(600f, 38f));
+            TopLeft, TopLeft, new Vector2(230f, -132f), new Vector2(600f, 38f));
 
         resultRarityBack = CreateSlicedImage(panel, "RarityBadge", BadgeColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(230f, -168f), new Vector2(130f, 30f));
+            TopLeft, TopLeft, new Vector2(230f, -186f), new Vector2(130f, 30f));
         resultRarityText = CreateText(panel, "RarityText", string.Empty,
             ResultBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(230f, -168f), new Vector2(130f, 30f));
+            TopLeft, TopLeft, new Vector2(230f, -186f), new Vector2(130f, 30f));
 
         CreateSlicedImage(panel, "RoleBadge", BadgeColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(372f, -168f), new Vector2(130f, 30f));
+            TopLeft, TopLeft, new Vector2(372f, -186f), new Vector2(130f, 30f));
         resultRoleText = CreateText(panel, "RoleText", string.Empty,
             ResultBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(372f, -168f), new Vector2(130f, 30f));
+            TopLeft, TopLeft, new Vector2(372f, -186f), new Vector2(130f, 30f));
         resultRoleText.color = DimTextColor;
 
         CreateSlicedImage(panel, "LevelBadge", BadgeColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(514f, -168f), new Vector2(120f, 30f));
+            TopLeft, TopLeft, new Vector2(514f, -186f), new Vector2(120f, 30f));
         resultLevelText = CreateText(panel, "LevelText", string.Empty,
             ResultBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(514f, -168f), new Vector2(120f, 30f));
+            TopLeft, TopLeft, new Vector2(514f, -186f), new Vector2(120f, 30f));
         resultLevelText.color = GoldAccent;
 
         resultStatHp = CreateText(panel, "StatHp", string.Empty,
             ResultStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(230f, -216f), new Vector2(600f, 28f));
+            TopLeft, TopLeft, new Vector2(230f, -236f), new Vector2(600f, 28f));
         resultStatAtk = CreateText(panel, "StatAtk", string.Empty,
             ResultStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(230f, -252f), new Vector2(600f, 28f));
+            TopLeft, TopLeft, new Vector2(230f, -268f), new Vector2(600f, 28f));
         resultStatDef = CreateText(panel, "StatDef", string.Empty,
             ResultStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(230f, -288f), new Vector2(600f, 28f));
+            TopLeft, TopLeft, new Vector2(230f, -300f), new Vector2(600f, 28f));
         resultStatSpd = CreateText(panel, "StatSpd", string.Empty,
             ResultStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(230f, -324f), new Vector2(600f, 28f));
+            TopLeft, TopLeft, new Vector2(230f, -332f), new Vector2(600f, 28f));
 
         // ---- VIEW HEROES button (bottom center) ----
         RectTransform viewRect = CreateRect(panel, "ViewHeroesButton");

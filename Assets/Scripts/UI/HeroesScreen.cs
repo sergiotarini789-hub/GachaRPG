@@ -24,17 +24,25 @@ using UnityEngine.UI;
 ///   hero and updates the details view;
 /// - a details panel on the right showing the selected hero's portrait
 ///   placeholder, name, rarity, role, level, current XP and the XP
-///   required for the next level, current stats (HP / ATK / DEF / SPD),
-///   and its available skills.
+///   required for the next level, ascension rank, awakening rank, Hero
+///   Soul progress, current stats (HP / ATK / DEF / SPD), and its skills
+///   with per-skill levels;
+/// - functional progression controls for the selected hero: LEVEL UP
+///   (placeholder gold-to-XP exchange), ASCEND, AWAKEN (spends Hero
+///   Souls), and per-skill UPGRADE buttons - each button reflects the
+///   hero's and wallet's real state and performs the operation through the
+///   HeroInstance progression APIs, never fake interactions;
+/// - a clearly marked DEBUG tool column (development only): add XP, add
+///   gold, add a soul, and reset the selected hero's progression.
 ///
 /// This is a pure view layer: every value is read from the actual
 /// <see cref="HeroInstance"/> (progression and current stats) and its
 /// <see cref="HeroData"/> template (name, rarity, role, skill kit) -
 /// nothing about any specific hero is hardcoded here, so future heroes and
-/// future rarities render without code changes. There is no leveling UI
-/// (progression interaction is a later milestone), no gacha, and no combat
-/// logic; battles keep building their own ephemeral instances exactly as
-/// before.
+/// future rarities render without code changes. All progression logic
+/// lives in HeroInstance / HeroProgression / the runner's wallet; this
+/// screen only displays state, requests actions, and saves through the
+/// runner after each change.
 /// </summary>
 public class HeroesScreen : MonoBehaviour
 {
@@ -69,6 +77,12 @@ public class HeroesScreen : MonoBehaviour
     /// <summary>Dimmed text used for subtitles, stat labels, and skill meta.</summary>
     private static readonly Color DimTextColor = new Color(1f, 1f, 1f, 0.55f);
 
+    /// <summary>Backing for an available (interactable) action button.</summary>
+    private static readonly Color ActionReadyColor = new Color(0.10f, 0.13f, 0.20f, 0.98f);
+
+    /// <summary>Backing for an unavailable (dimmed) action button.</summary>
+    private static readonly Color ActionDimColor = new Color(0.06f, 0.075f, 0.12f, 0.85f);
+
     /// <summary>Rich-text color tag for stat labels.</summary>
     private const string StatLabelTag = "<color=#99A3AF>";
 
@@ -102,7 +116,13 @@ public class HeroesScreen : MonoBehaviour
     private const float DetailPortraitSize = 220f;
 
     /// <summary>Width and height of one skill row in the details panel.</summary>
-    private const float SkillRowWidth = 1276f;
+    private const float SkillRowWidth = 620f;
+
+    /// <summary>X position of the right-hand action column inside the details panel.</summary>
+    private const float ControlsColumnX = 980f;
+
+    /// <summary>Width of the action column's buttons.</summary>
+    private const float ActionButtonWidth = 336f;
 
     /// <summary>Height of one skill row in the details panel.</summary>
     private const float SkillRowHeight = 64f;
@@ -129,8 +149,11 @@ public class HeroesScreen : MonoBehaviour
     private const int DetailBadgeFontSize = 16;
     private const int DetailXpFontSize = 22;
     private const int DetailStatFontSize = 24;
-    private const int DetailSkillNameFontSize = 22;
-    private const int DetailSkillMetaFontSize = 18;
+    private const int DetailSkillNameFontSize = 20;
+    private const int DetailSkillMetaFontSize = 15;
+    private const int ActionButtonFontSize = 17;
+    private const int StatusFontSize = 16;
+    private const int DebugButtonFontSize = 14;
     private const int DetailPortraitFontSize = 92;
     private const int EmptyStateFontSize = 26;
 
@@ -222,6 +245,39 @@ public class HeroesScreen : MonoBehaviour
 
     /// <summary>Details empty-state line, shown instead of everything else when no hero is selected.</summary>
     private Text detailEmptyText;
+
+    /// <summary>Ascension rank line, e.g. "ASCENSION 1 / 4   next cap: 30".</summary>
+    private Text ascensionLine;
+
+    /// <summary>Awakening rank line with the next rank's bonuses.</summary>
+    private Text awakeningLine;
+
+    /// <summary>Hero Soul progress line, e.g. "SOULS 12 / 20".</summary>
+    private Text soulsLine;
+
+    /// <summary>Right-hand action column root (LEVEL UP / ASCEND / AWAKEN, status, DEBUG tools); hidden without a selection.</summary>
+    private GameObject controlsRoot;
+
+    /// <summary>LEVEL UP button.</summary>
+    private Button levelUpButton;
+
+    /// <summary>LEVEL UP button label.</summary>
+    private Text levelUpLabel;
+
+    /// <summary>ASCEND button.</summary>
+    private Button ascendButton;
+
+    /// <summary>ASCEND button label.</summary>
+    private Text ascendLabel;
+
+    /// <summary>AWAKEN button.</summary>
+    private Button awakenButton;
+
+    /// <summary>AWAKEN button label.</summary>
+    private Text awakenLabel;
+
+    /// <summary>One-line feedback for the latest progression action.</summary>
+    private Text statusText;
 
     /// <summary>The details elements that only make sense with a selected hero.</summary>
     private readonly List<Graphic> detailHeroElements = new List<Graphic>();
@@ -383,6 +439,7 @@ public class HeroesScreen : MonoBehaviour
     private void SelectHero(HeroInstance hero)
     {
         selectedHero = hero;
+        SetStatus(string.Empty); // a new selection clears the previous action's feedback
 
         for (int i = 0; i < cardHeroes.Count; i++)
         {
@@ -410,6 +467,11 @@ public class HeroesScreen : MonoBehaviour
         foreach (Graphic element in detailHeroElements)
         {
             element.gameObject.SetActive(hasHero);
+        }
+
+        if (controlsRoot != null)
+        {
+            controlsRoot.SetActive(hasHero);
         }
 
         detailEmptyText.gameObject.SetActive(!hasHero);
@@ -445,13 +507,51 @@ public class HeroesScreen : MonoBehaviour
         detailRarityText.text = rarity.Label;
         detailRarityText.color = Color.Lerp(rarity.Color, Color.white, 0.25f);
         detailRoleText.text = RoleLabel(data.role);
-        detailLevelText.text = "LEVEL " + hero.Level;
+        detailLevelText.text = "LV " + hero.Level + " / " + hero.MaxLevel;
 
-        // XP: current experience vs. the requirement for the next level;
-        // max-level heroes show MAX LEVEL instead of a meaningless 0 / 0.
-        detailXpText.text = hero.IsMaxLevel
-            ? "MAX LEVEL  (Lv " + hero.MaxLevel + ")"
-            : "XP  " + hero.Experience + " / " + hero.ExperienceToNextLevel + "  to next level";
+        // XP: current experience vs. the requirement for the next level. At
+        // the cap, point at ascension (or show MAX LEVEL at the final cap).
+        if (!hero.IsMaxLevel)
+        {
+            detailXpText.text = "XP  " + hero.Experience + " / " + hero.ExperienceToNextLevel + "  to next level";
+        }
+        else if (hero.Ascension < HeroProgression.MaxAscensionRank)
+        {
+            detailXpText.text = "Level cap reached - ASCEND to raise it (max level " + hero.MaxLevel + ")";
+        }
+        else
+        {
+            detailXpText.text = "MAX LEVEL  (Lv " + hero.MaxLevel + ")";
+        }
+
+        // Ascension rank and the next cap.
+        ascensionLine.text = hero.Ascension >= HeroProgression.MaxAscensionRank
+            ? "ASCENSION  " + hero.Ascension + " / " + HeroProgression.MaxAscensionRank + "   (MAX)"
+            : "ASCENSION  " + hero.Ascension + " / " + HeroProgression.MaxAscensionRank
+                + "   next cap: level " + HeroProgression.AscensionMaxLevel(hero.Ascension + 1);
+
+        // Awakening rank and the next rank's real stat bonuses.
+        AwakeningStep nextStep = hero.NextAwakeningStep();
+        awakeningLine.text = nextStep != null
+            ? "AWAKENING  " + hero.Awakening + " / " + hero.MaxAwakeningRank
+                + "   next: " + (string.IsNullOrEmpty(nextStep.displayName) ? ("rank " + (hero.Awakening + 1)) : nextStep.displayName)
+                + " (" + AwakeningBonusText(nextStep) + ")"
+            : "AWAKENING  " + hero.Awakening + " / " + hero.MaxAwakeningRank + "   (MAX)";
+
+        // Hero Soul progress toward the next awakening (plain total at max).
+        if (hero.MaxAwakeningRank == 0)
+        {
+            soulsLine.text = "SOULS  " + hero.Souls + "   (no awakening configured)";
+        }
+        else if (nextStep != null)
+        {
+            int cost = hero.AwakeningSoulCost(hero.Awakening + 1);
+            soulsLine.text = "SOULS  " + hero.Souls + " / " + cost;
+        }
+        else
+        {
+            soulsLine.text = "SOULS  " + hero.Souls;
+        }
 
         // Current stats straight off the instance.
         detailStatHp.text = StatLine("HP", hero.currentHealth + " / " + hero.maxHealth);
@@ -459,7 +559,251 @@ public class HeroesScreen : MonoBehaviour
         detailStatDef.text = StatLine("DEFENSE", hero.currentDefense.ToString());
         detailStatSpd.text = StatLine("SPEED", hero.currentSpeed.ToString());
 
+        RefreshActionButtons(hero);
         RebuildSkillRows(hero);
+    }
+
+    /// <summary>
+    /// Reflects the hero's and wallet's real state on the three main
+    /// progression buttons: enabled only when the action is actually
+    /// possible, with informative labels (costs, requirements, MAX states).
+    /// </summary>
+    private void RefreshActionButtons(HeroInstance hero)
+    {
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+
+        // LEVEL UP: placeholder gold-to-XP exchange; disabled at the cap or
+        // when the wallet cannot cover it.
+        if (hero.IsMaxLevel)
+        {
+            levelUpLabel.text = "MAX LEVEL";
+            levelUpButton.interactable = false;
+        }
+        else
+        {
+            int targetLevel = hero.Level + 1;
+            int cost = HeroProgression.LevelUpGoldCostPerLevel * targetLevel;
+            levelUpLabel.text = "LEVEL UP   " + cost + " gold";
+            levelUpButton.interactable = wallet != null && wallet.gold >= cost;
+        }
+
+        // ASCEND: rank, level, and wallet requirements.
+        if (hero.Ascension >= HeroProgression.MaxAscensionRank)
+        {
+            ascendLabel.text = "MAX ASCENSION";
+            ascendButton.interactable = false;
+        }
+        else if (hero.Level < HeroProgression.AscensionMaxLevel(hero.Ascension))
+        {
+            ascendLabel.text = "ASCEND   (needs level " + HeroProgression.AscensionMaxLevel(hero.Ascension) + ")";
+            ascendButton.interactable = false;
+        }
+        else
+        {
+            int gold = HeroProgression.AscensionGoldCost(hero.Ascension + 1);
+            int materials = HeroProgression.AscensionMaterialCost(hero.Ascension + 1);
+            ascendLabel.text = "ASCEND   " + gold + " gold + " + materials + " mats";
+            ascendButton.interactable = wallet != null && wallet.CanAfford(gold, materials, 0);
+        }
+
+        // AWAKEN: soul progress; enabled only when affordable.
+        if (hero.MaxAwakeningRank == 0)
+        {
+            awakenLabel.text = "NO AWAKENING";
+            awakenButton.interactable = false;
+        }
+        else if (hero.Awakening >= hero.MaxAwakeningRank)
+        {
+            awakenLabel.text = "MAX AWAKENING";
+            awakenButton.interactable = false;
+        }
+        else
+        {
+            int soulCost = hero.AwakeningSoulCost(hero.Awakening + 1);
+            awakenLabel.text = "AWAKEN   " + hero.Souls + " / " + soulCost + " SOULS";
+            awakenButton.interactable = hero.Souls >= soulCost;
+        }
+    }
+
+    /// <summary>Short text of an awakening step's real stat bonuses ("+4% ATK, +4% HP").</summary>
+    private static string AwakeningBonusText(AwakeningStep step)
+    {
+        if (step == null)
+        {
+            return "no bonuses";
+        }
+
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        if (step.attackBonusPercent != 0f) text.Append("+").Append(step.attackBonusPercent).Append("% ATK ");
+        if (step.healthBonusPercent != 0f) text.Append("+").Append(step.healthBonusPercent).Append("% HP ");
+        if (step.defenseBonusPercent != 0f) text.Append("+").Append(step.defenseBonusPercent).Append("% DEF ");
+        if (step.speedBonusPercent != 0f) text.Append("+").Append(step.speedBonusPercent).Append("% SPD");
+        return text.Length > 0 ? text.ToString().TrimEnd() : (string.IsNullOrEmpty(step.description) ? "no bonuses" : step.description);
+    }
+
+    // ---------------------------------------------------------------------
+    // Progression actions. Each performs the real operation through the
+    // HeroInstance APIs and the runner's wallet, refreshes the view, and
+    // persists immediately. No fake success states.
+    // ---------------------------------------------------------------------
+
+    /// <summary>LEVEL UP: converts placeholder gold into exactly the XP needed for the next level.</summary>
+    private void OnLevelUpClicked()
+    {
+        HeroInstance hero = selectedHero;
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || wallet == null || hero.IsMaxLevel)
+        {
+            return;
+        }
+
+        int cost = HeroProgression.LevelUpGoldCostPerLevel * (hero.Level + 1);
+        if (!wallet.TryConsume(cost, 0, 0))
+        {
+            SetStatus("Not enough gold.");
+            return;
+        }
+
+        hero.AddExperience(hero.ExperienceToNextLevel);
+        SetStatus(hero.displayName + " reached level " + hero.Level + "!");
+        AfterProgressionAction();
+    }
+
+    /// <summary>ASCEND: raises the level cap through the real ascension API.</summary>
+    private void OnAscendClicked()
+    {
+        HeroInstance hero = selectedHero;
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || wallet == null)
+        {
+            return;
+        }
+
+        if (!hero.Ascend(wallet))
+        {
+            hero.CanAscend(wallet, out string reason);
+            SetStatus("Cannot ascend: " + reason + ".");
+            return;
+        }
+
+        SetStatus("Ascended to rank " + hero.Ascension + "! Max level is now " + hero.MaxLevel + ".");
+        AfterProgressionAction();
+    }
+
+    /// <summary>AWAKEN: spends Hero Souls on the next awakening rank.</summary>
+    private void OnAwakenClicked()
+    {
+        HeroInstance hero = selectedHero;
+        if (hero == null)
+        {
+            return;
+        }
+
+        if (!hero.Awaken())
+        {
+            hero.CanAwaken(out string reason);
+            SetStatus("Cannot awaken: " + reason + ".");
+            return;
+        }
+
+        SetStatus("Awakened to rank " + hero.Awakening + "!");
+        AfterProgressionAction();
+    }
+
+    /// <summary>UPGRADE (per skill): raises the skill's level through the real API.</summary>
+    private void OnUpgradeSkillClicked(SkillData skill)
+    {
+        HeroInstance hero = selectedHero;
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || wallet == null || skill == null)
+        {
+            return;
+        }
+
+        if (!hero.UpgradeSkill(skill, wallet))
+        {
+            hero.CanUpgradeSkill(skill, wallet, out string reason);
+            SetStatus("Cannot upgrade: " + reason + ".");
+            return;
+        }
+
+        SetStatus(skill.skillName + " upgraded to level " + hero.GetSkillLevel(skill) + ".");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: grants 1000 XP to the selected hero (development tool).</summary>
+    private void OnDebugAddXp()
+    {
+        HeroInstance hero = selectedHero;
+        if (hero == null)
+        {
+            return;
+        }
+
+        int levels = hero.AddExperience(1000);
+        SetStatus("DEBUG: +1000 XP (" + (levels > 0 ? levels + " level(s) gained" : "banked") + ").");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: adds 10000 gold to the wallet (development tool).</summary>
+    private void OnDebugAddGold()
+    {
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (wallet == null)
+        {
+            return;
+        }
+
+        wallet.AddGold(10000);
+        SetStatus("DEBUG: +10000 gold.");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: adds one Hero Soul to the selected hero (development tool).</summary>
+    private void OnDebugAddSoul()
+    {
+        HeroInstance hero = selectedHero;
+        if (hero == null)
+        {
+            return;
+        }
+
+        hero.AddSouls(1);
+        SetStatus("DEBUG: +1 soul.");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: wipes the selected hero's progression back to level 1 (development tool).</summary>
+    private void OnDebugResetHero()
+    {
+        HeroInstance hero = selectedHero;
+        if (hero == null)
+        {
+            return;
+        }
+
+        hero.ResetProgression();
+        SetStatus("DEBUG: progression reset.");
+        AfterProgressionAction();
+    }
+
+    /// <summary>Shows one line of feedback for the latest action.</summary>
+    private void SetStatus(string message)
+    {
+        if (statusText != null)
+        {
+            statusText.text = message ?? string.Empty;
+        }
+    }
+
+    /// <summary>Refreshes the details view and persists the profile after any progression change.</summary>
+    private void AfterProgressionAction()
+    {
+        RefreshDetails();
+        if (runner != null)
+        {
+            runner.SaveProfile();
+        }
     }
 
     // ---------------------------------------------------------------------
@@ -559,13 +903,15 @@ public class HeroesScreen : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds the details panel's static elements: portrait, name, badges,
-    /// XP line, stat lines, and the skills section. All values are filled
-    /// in <see cref="RefreshDetails"/>.
+    /// Builds the details panel's static elements in three columns: the
+    /// portrait and stats (left), identity + progression lines + skills
+    /// (middle), and the action column with LEVEL UP / ASCEND / AWAKEN,
+    /// the action status line, and the clearly marked DEBUG tools (right).
+    /// All values are filled in <see cref="RefreshDetails"/>.
     /// </summary>
     private void BuildDetailsPanel(RectTransform panel)
     {
-        // ---- Portrait (top-left) ----
+        // ---- Left column: portrait + current stats ----
         detailPortraitFrame = CreateSlicedImage(panel, "PortraitFrame", Color.white, frameSprite,
             TopLeft, TopLeft, new Vector2(36f, -36f), new Vector2(DetailPortraitSize, DetailPortraitSize));
         CreateSlicedImage(panel, "PortraitBack", PortraitBackColor, panelSprite,
@@ -580,10 +926,23 @@ public class HeroesScreen : MonoBehaviour
             DetailPortraitFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopLeft, TopLeft, new Vector2(45f, -45f), new Vector2(DetailPortraitSize - 18f, DetailPortraitSize - 18f));
 
-        // ---- Name, badges, XP (right of the portrait) ----
+        detailStatHp = CreateText(panel, "StatHp", string.Empty,
+            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(36f, -290f), new Vector2(220f, 30f));
+        detailStatAtk = CreateText(panel, "StatAtk", string.Empty,
+            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(36f, -330f), new Vector2(220f, 30f));
+        detailStatDef = CreateText(panel, "StatDef", string.Empty,
+            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(36f, -370f), new Vector2(220f, 30f));
+        detailStatSpd = CreateText(panel, "StatSpd", string.Empty,
+            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(36f, -410f), new Vector2(220f, 30f));
+
+        // ---- Middle column: identity, progression, skills ----
         detailName = CreateText(panel, "Name", string.Empty,
             DetailNameFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -44f), new Vector2(640f, 46f));
+            TopLeft, TopLeft, new Vector2(300f, -44f), new Vector2(620f, 46f));
 
         detailRarityBack = CreateSlicedImage(panel, "RarityBadge", BadgeColor, panelSprite,
             TopLeft, TopLeft, new Vector2(300f, -104f), new Vector2(140f, 34f));
@@ -598,51 +957,82 @@ public class HeroesScreen : MonoBehaviour
             TopLeft, TopLeft, new Vector2(452f, -104f), new Vector2(140f, 34f));
         detailRoleText.color = DimTextColor;
 
-        RectTransform levelRect = CreateRect(panel, "LevelBadge");
-        levelRect.anchorMin = new Vector2(1f, 1f);
-        levelRect.anchorMax = new Vector2(1f, 1f);
-        levelRect.pivot = new Vector2(1f, 1f);
-        levelRect.anchoredPosition = new Vector2(-36f, -36f);
-        levelRect.sizeDelta = new Vector2(160f, 40f);
-        CreateSlicedImage(levelRect, "Back", BadgeColor, panelSprite,
-            TopLeft, TopLeft, Vector2.zero, levelRect.sizeDelta);
-        detailLevelText = CreateText(levelRect, "Label", string.Empty,
+        CreateSlicedImage(panel, "LevelBadge", BadgeColor, panelSprite,
+            TopLeft, TopLeft, new Vector2(604f, -104f), new Vector2(170f, 34f));
+        detailLevelText = CreateText(panel, "LevelText", string.Empty,
             DetailBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, Vector2.zero, levelRect.sizeDelta);
+            TopLeft, TopLeft, new Vector2(604f, -104f), new Vector2(170f, 34f));
         detailLevelText.color = GoldAccent;
 
         detailXpText = CreateText(panel, "Xp", string.Empty,
             DetailXpFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -156f), new Vector2(760f, 28f));
+            TopLeft, TopLeft, new Vector2(300f, -156f), new Vector2(620f, 28f));
         detailXpText.color = DimTextColor;
 
-        // ---- Stats (under name/badges) ----
-        detailStatHp = CreateText(panel, "StatHp", string.Empty,
-            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -206f), new Vector2(560f, 30f));
-        detailStatAtk = CreateText(panel, "StatAtk", string.Empty,
-            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -246f), new Vector2(560f, 30f));
-        detailStatDef = CreateText(panel, "StatDef", string.Empty,
-            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -286f), new Vector2(560f, 30f));
-        detailStatSpd = CreateText(panel, "StatSpd", string.Empty,
-            DetailStatFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(300f, -326f), new Vector2(560f, 30f));
+        ascensionLine = CreateText(panel, "Ascension", string.Empty,
+            DetailXpFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -192f), new Vector2(620f, 24f));
+        ascensionLine.color = DimTextColor;
 
-        // ---- Skills section ----
+        awakeningLine = CreateText(panel, "Awakening", string.Empty,
+            DetailXpFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -224f), new Vector2(620f, 24f));
+        awakeningLine.color = DimTextColor;
+
+        soulsLine = CreateText(panel, "Souls", string.Empty,
+            DetailXpFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -256f), new Vector2(620f, 24f));
+        soulsLine.color = GoldAccent;
+
         detailSkillsHeader = CreateText(panel, "SkillsHeader", "SKILLS",
             SectionHeaderFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(36f, -356f), new Vector2(300f, 34f));
+            TopLeft, TopLeft, new Vector2(300f, -300f), new Vector2(300f, 34f));
         detailSkillsHeader.color = GoldAccent;
 
         RectTransform skills = CreateRect(panel, "Skills");
         skills.anchorMin = TopLeft;
         skills.anchorMax = TopLeft;
         skills.pivot = new Vector2(0f, 1f);
-        skills.anchoredPosition = new Vector2(36f, -398f);
+        skills.anchoredPosition = new Vector2(300f, -338f);
         skills.sizeDelta = new Vector2(SkillRowWidth, 0f);
         skillsRoot = skills;
+
+        // ---- Right column: action buttons, status, DEBUG tools ----
+        RectTransform controls = CreateRect(panel, "ProgressionControls");
+        controls.anchorMin = TopLeft;
+        controls.anchorMax = TopLeft;
+        controls.pivot = new Vector2(0f, 1f);
+        controls.anchoredPosition = new Vector2(ControlsColumnX, -40f);
+        controls.sizeDelta = new Vector2(ActionButtonWidth, 0f);
+        controlsRoot = controls.gameObject;
+
+        levelUpButton = BuildActionButton(controls, "LevelUpButton", "LEVEL UP", 0f, OnLevelUpClicked, out levelUpLabel);
+        ascendButton = BuildActionButton(controls, "AscendButton", "ASCEND", -76f, OnAscendClicked, out ascendLabel);
+        awakenButton = BuildActionButton(controls, "AwakenButton", "AWAKEN", -152f, OnAwakenClicked, out awakenLabel);
+
+        statusText = CreateText(controls, "Status", string.Empty,
+            StatusFontSize, FontStyle.Normal, TextAnchor.UpperLeft,
+            TopLeft, TopLeft, new Vector2(4f, -228f), new Vector2(ActionButtonWidth - 8f, 96f));
+        statusText.color = DimTextColor;
+        statusText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        statusText.verticalOverflow = VerticalWrapMode.Overflow;
+
+        Text debugHeader = CreateText(controls, "DebugHeader", "DEBUG - DEV TOOLS ONLY",
+            DebugButtonFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(4f, -338f), new Vector2(ActionButtonWidth, 20f));
+        debugHeader.color = new Color(0.95f, 0.45f, 0.35f);
+
+        BuildDebugButton(controls, "DebugXp", "+1000 XP", 0f, -366f, OnDebugAddXp);
+        BuildDebugButton(controls, "DebugGold", "+10K GOLD", 174f, -366f, OnDebugAddGold);
+        BuildDebugButton(controls, "DebugSoul", "+1 SOUL", 0f, -420f, OnDebugAddSoul);
+        BuildDebugButton(controls, "DebugReset", "RESET HERO", 174f, -420f, OnDebugResetHero);
+
+        Text debugNote = CreateText(controls, "DebugNote", "Development tools, not player mechanics.",
+            DebugButtonFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(4f, -474f), new Vector2(ActionButtonWidth, 34f));
+        debugNote.color = DimTextColor;
+        debugNote.horizontalOverflow = HorizontalWrapMode.Wrap;
+        debugNote.verticalOverflow = VerticalWrapMode.Overflow;
 
         // ---- Empty state (shown only when the roster has no heroes) ----
         detailEmptyText = CreateText(panel, "Empty", "No heroes yet",
@@ -652,13 +1042,65 @@ public class HeroesScreen : MonoBehaviour
         detailEmptyText.gameObject.SetActive(false);
 
         // Everything except the empty state disappears when no hero is
-        // selected.
+        // selected (the action column is a GameObject, handled separately).
         detailHeroElements.AddRange(new Graphic[]
         {
             detailPortraitFrame, detailPortraitIcon, detailPortraitGlyph, detailName,
             detailRarityBack, detailRarityText, detailRoleText, detailLevelText, detailXpText,
             detailStatHp, detailStatAtk, detailStatDef, detailStatSpd, detailSkillsHeader,
+            ascensionLine, awakeningLine, soulsLine,
         });
+    }
+
+    /// <summary>Builds one full-width action button (raycastable dark panel + gold label).</summary>
+    private Button BuildActionButton(Transform parent, string name, string initialLabel, float y, UnityEngine.Events.UnityAction onClick, out Text label)
+    {
+        RectTransform rect = CreateRect(parent, name);
+        rect.anchorMin = TopLeft;
+        rect.anchorMax = TopLeft;
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(0f, y);
+        rect.sizeDelta = new Vector2(ActionButtonWidth, 60f);
+
+        Image back = CreateSlicedImage(rect, "Back", BadgeColor, panelSprite,
+            TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
+        back.raycastTarget = true;
+
+        label = CreateText(rect, "Label", initialLabel,
+            ActionButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        Stretch(label.rectTransform);
+        label.color = GoldAccent;
+
+        Button button = rect.gameObject.AddComponent<Button>();
+        button.targetGraphic = back;
+        button.onClick.AddListener(onClick);
+        return button;
+    }
+
+    /// <summary>Builds one small DEBUG tool button (marked dev-only, never styled as a player mechanic).</summary>
+    private void BuildDebugButton(Transform parent, string name, string initialLabel, float x, float y, UnityEngine.Events.UnityAction onClick)
+    {
+        RectTransform rect = CreateRect(parent, name);
+        rect.anchorMin = TopLeft;
+        rect.anchorMax = TopLeft;
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = new Vector2(x, y);
+        rect.sizeDelta = new Vector2(158f, 44f);
+
+        Image back = CreateSlicedImage(rect, "Back", new Color(0.16f, 0.07f, 0.06f, 0.95f), panelSprite,
+            TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
+        back.raycastTarget = true;
+
+        Text label = CreateText(rect, "Label", initialLabel,
+            DebugButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        Stretch(label.rectTransform);
+        label.color = new Color(0.95f, 0.55f, 0.45f);
+
+        Button button = rect.gameObject.AddComponent<Button>();
+        button.targetGraphic = back;
+        button.onClick.AddListener(onClick);
     }
 
     /// <summary>
@@ -805,8 +1247,9 @@ public class HeroesScreen : MonoBehaviour
 
     /// <summary>
     /// Builds one row per skill in the selected hero's kit, straight from
-    /// the live <see cref="HeroInstance.skills"/> list: skill name on the
-    /// left, effect / target / power / cooldown on the right.
+    /// the live <see cref="HeroInstance"/>: skill name, effect meta with
+    /// the hero's CURRENT effective multiplier, the skill's level, and a
+    /// per-skill UPGRADE button reflecting the real wallet/level state.
     /// </summary>
     private void RebuildSkillRows(HeroInstance hero)
     {
@@ -818,6 +1261,7 @@ public class HeroesScreen : MonoBehaviour
             return;
         }
 
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
         for (int i = 0; i < skills.Count; i++)
         {
             SkillData skill = skills[i];
@@ -836,23 +1280,58 @@ public class HeroesScreen : MonoBehaviour
             CreateSlicedImage(row, "Back", BadgeColor, panelSprite,
                 TopLeft, TopLeft, Vector2.zero, row.sizeDelta);
 
-            string name = string.IsNullOrEmpty(skill.skillName) ? "Unnamed skill" : skill.skillName;
-            CreateText(row, "Name", name,
+            string skillName = string.IsNullOrEmpty(skill.skillName) ? "Unnamed skill" : skill.skillName;
+            CreateText(row, "Name", skillName,
                 DetailSkillNameFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
-                TopLeft, TopLeft, new Vector2(20f, -8f), new Vector2(480f, 30f)).color = GoldAccent;
+                TopLeft, TopLeft, new Vector2(14f, -6f), new Vector2(300f, 24f)).color = GoldAccent;
 
-            CreateText(row, "Meta", SkillMetaLine(skill),
-                DetailSkillMetaFontSize, FontStyle.Normal, TextAnchor.MiddleRight,
-                new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-20f, -14f), new Vector2(700f, 24f))
-                .color = DimTextColor;
+            CreateText(row, "Meta", SkillMetaLine(hero, skill),
+                DetailSkillMetaFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
+                TopLeft, TopLeft, new Vector2(14f, -34f), new Vector2(470f, 20f)).color = DimTextColor;
+
+            int level = hero.GetSkillLevel(skill);
+            int maxLevel = hero.GetSkillMaxLevel(skill);
+            CreateText(row, "Level", "Lv " + level + " / " + maxLevel,
+                DetailSkillMetaFontSize, FontStyle.Bold, TextAnchor.MiddleRight,
+                new Vector2(1f, 0f), new Vector2(1f, 0f), new Vector2(-132f, -12f), new Vector2(70f, 22f)).color = Color.white;
+
+            // Per-skill UPGRADE button: enabled only when the real upgrade
+            // would succeed right now; shows the real cost.
+            bool canUpgrade = hero.CanUpgradeSkill(skill, wallet, out _);
+            int goldCost = skill.upgradeGoldCost * level;
+
+            RectTransform upgradeRect = CreateRect(row, "UpgradeButton");
+            upgradeRect.anchorMin = new Vector2(1f, 0.5f);
+            upgradeRect.anchorMax = new Vector2(1f, 0.5f);
+            upgradeRect.pivot = new Vector2(1f, 0.5f);
+            upgradeRect.anchoredPosition = new Vector2(-8f, 0f);
+            upgradeRect.sizeDelta = new Vector2(116f, 36f);
+
+            Image upgradeBack = CreateSlicedImage(upgradeRect, "Back", BadgeColor, panelSprite,
+                TopLeft, TopLeft, Vector2.zero, upgradeRect.sizeDelta);
+            upgradeBack.raycastTarget = true;
+            upgradeBack.color = canUpgrade ? ActionReadyColor : ActionDimColor;
+
+            Text upgradeLabel = CreateText(upgradeRect, "Label",
+                level >= maxLevel ? "MAX" : "UPGRADE " + goldCost + "g",
+                DebugButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+                new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+            Stretch(upgradeLabel.rectTransform);
+            upgradeLabel.color = canUpgrade ? GoldAccent : DimTextColor;
+
+            Button upgradeButton = upgradeRect.gameObject.AddComponent<Button>();
+            upgradeButton.targetGraphic = upgradeBack;
+            upgradeButton.interactable = canUpgrade;
+            SkillData captured = skill;
+            upgradeButton.onClick.AddListener(() => OnUpgradeSkillClicked(captured));
         }
     }
 
-    /// <summary>One skill meta line: effect, target, power, cooldown.</summary>
-    private static string SkillMetaLine(SkillData skill)
+    /// <summary>One skill meta line: effect, target, the hero's current effective power, cooldown.</summary>
+    private static string SkillMetaLine(HeroInstance hero, SkillData skill)
     {
         return SkillTypeLabel(skill.type) + "  |  " + SkillTargetLabel(skill.target)
-            + "  |  " + skill.damageMultiplier.ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture) + "x"
+            + "  |  " + hero.GetSkillMultiplier(skill).ToString("0.0##", System.Globalization.CultureInfo.InvariantCulture) + "x"
             + "  |  CD " + skill.cooldown;
     }
 

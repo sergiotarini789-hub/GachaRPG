@@ -17,10 +17,11 @@ using UnityEngine.UI;
 /// - a top bar with the player profile (avatar, name, account level) and
 ///   placeholder currency chips (no wallet/account system exists yet - the
 ///   displayed values are stand-in constants);
-/// - a large center area for the player's squad: one showcase card per hero
-///   template assigned to the runner (portrait frame, name, level, rarity,
-///   role, base stats) plus a prominent BATTLE button that starts the
-///   existing battle;
+/// - a large center area for the player's squad: one showcase card per
+///   squad slot (portrait frame, name, live level, rarity, role, current
+///   stats) reading the roster's real HeroInstance progression - plus a
+///   prominent BATTLE button that starts the existing battle with those
+///   heroes' current calculated stats;
 /// - a bottom navigation bar: Home / Heroes / Summon / Battle / Shop. Home
 ///   returns to the squad view; Heroes opens the runtime Heroes collection
 ///   screen (see HeroesScreen) and Summon opens the runtime Summon screen
@@ -183,6 +184,9 @@ public class MainMenu : MonoBehaviour
     /// <summary>The center content shown on the Home tab: squad cards + BATTLE button.</summary>
     private GameObject homeView;
 
+    /// <summary>Container of the squad cards, so they can be rebuilt on every menu activation.</summary>
+    private RectTransform squadCardsRoot;
+
     /// <summary>The center content shown for Heroes / Summon / Shop.</summary>
     private GameObject placeholderView;
 
@@ -280,6 +284,21 @@ public class MainMenu : MonoBehaviour
     {
         BuildSquadCards();
         ShowTab(0);
+    }
+
+    /// <summary>
+    /// Rebuilds the squad cards every time the menu is (re)activated - after
+    /// a battle, after visiting Heroes or Summon - so levels and stats
+    /// always reflect the roster's current progression. The very first
+    /// OnEnable runs during <see cref="Create"/> before the runner is
+    /// assigned; Initialize performs that initial build instead.
+    /// </summary>
+    private void OnEnable()
+    {
+        if (runner != null)
+        {
+            BuildSquadCards();
+        }
     }
 
     /// <summary>
@@ -469,8 +488,12 @@ public class MainMenu : MonoBehaviour
             TopCenter, TopCenter, new Vector2(0f, -176f), new Vector2(600f, 40f));
         header.color = GoldAccent;
 
-        // The squad cards and the battle button are built in Initialize
-        // (they read the runner's hero templates); their parent is ready here.
+        // The squad cards live in their own container so they can be
+        // rebuilt (from the roster's live progression) every time the menu
+        // is re-activated; the BATTLE button is static and built once here.
+        squadCardsRoot = CreateRect(homeView.transform, "SquadCards");
+        Stretch(squadCardsRoot);
+        BuildBattleButton();
 
         // ---- Placeholder view: "Coming Soon" ----
         RectTransform placeholderRect = CreateRect(root, "PlaceholderView");
@@ -535,12 +558,13 @@ public class MainMenu : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds one hero showcase card from a template: portrait frame
-    /// (rarity-colored, showing <see cref="HeroData.icon"/> when art exists),
-    /// name, level badge, rarity and role badges, and the base stats. When
-    /// the template is null the card renders as an empty slot hint instead.
+    /// Builds one squad card: when the slot's hero is owned, the card reads
+    /// the roster's live HeroInstance (portrait frame, name, current level,
+    /// rarity, role, current calculated stats); a set-but-unowned slot
+    /// renders a NOT OWNED hint; an unset slot renders the old
+    /// assign-a-template hint.
     /// </summary>
-    private void BuildHeroCard(Transform parent, HeroData template, int index)
+    private void BuildHeroCard(Transform parent, HeroInstance hero, HeroData template, int index)
     {
         RectTransform card = CreateRect(parent, "HeroCard" + (index + 1));
         card.anchorMin = TopCenter;
@@ -568,10 +592,23 @@ public class MainMenu : MonoBehaviour
             return;
         }
 
-        // Level badge (the fixture fields heroes at level 1).
+        if (hero == null)
+        {
+            // Slot configured but the hero is not owned (yet).
+            CanvasGroup group = card.gameObject.AddComponent<CanvasGroup>();
+            group.alpha = 0.55f;
+            CreateText(card, "EmptyTitle", "NOT OWNED", CardNameFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+                TopCenter, TopCenter, new Vector2(0f, -190f), new Vector2(CardWidth - 40f, 36f)).color = DimTextColor;
+            CreateText(card, "EmptyHint", "Summon this hero to field it",
+                BadgeFontSize, FontStyle.Normal, TextAnchor.MiddleCenter,
+                TopCenter, TopCenter, new Vector2(0f, -236f), new Vector2(CardWidth - 40f, 30f)).color = DimTextColor;
+            return;
+        }
+
+        // Level badge from the live instance.
         CreateSlicedImage(card, "LevelBadge", BadgeColor, panelSprite,
             TopLeft, TopLeft, new Vector2(12f, -12f), new Vector2(74f, 28f));
-        CreateText(card, "LevelText", "Lv 1", BadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+        CreateText(card, "LevelText", "Lv " + hero.Level, BadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopLeft, TopLeft, new Vector2(12f, -12f), new Vector2(74f, 28f)).color = GoldAccent;
 
         // Portrait: the template's icon when art exists, otherwise the hero's
@@ -599,7 +636,7 @@ public class MainMenu : MonoBehaviour
         }
 
         // Name + badges.
-        CreateText(card, "Name", template.heroName, CardNameFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+        CreateText(card, "Name", hero.displayName, CardNameFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -186f), new Vector2(CardWidth - 32f, 38f));
 
         CreateSlicedImage(card, "RarityBadge", Color.Lerp(rarity.Color, Color.black, 0.72f), panelSprite,
@@ -613,17 +650,17 @@ public class MainMenu : MonoBehaviour
         CreateText(card, "RoleText", RoleLabel(template.role), BadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopLeft, TopLeft, new Vector2(198f, -236f), new Vector2(112f, 30f)).color = DimTextColor;
 
-        // Base stats (what the level-1 fixture fields). Rich text dims the labels.
-        CreateText(card, "StatHp", StatLine("HP", template.baseHealth),
+        // Current calculated stats straight off the live instance.
+        CreateText(card, "StatHp", StatLine("HP", hero.maxHealth),
             CardStatFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -290f), new Vector2(CardWidth - 60f, 26f));
-        CreateText(card, "StatAtk", StatLine("ATK", template.baseAttack),
+        CreateText(card, "StatAtk", StatLine("ATK", hero.currentAttack),
             CardStatFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -322f), new Vector2(CardWidth - 60f, 26f));
-        CreateText(card, "StatDef", StatLine("DEF", template.baseDefense),
+        CreateText(card, "StatDef", StatLine("DEF", hero.currentDefense),
             CardStatFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -354f), new Vector2(CardWidth - 60f, 26f));
-        CreateText(card, "StatSpd", StatLine("SPD", template.baseSpeed),
+        CreateText(card, "StatSpd", StatLine("SPD", hero.currentSpeed),
             CardStatFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             TopCenter, TopCenter, new Vector2(0f, -386f), new Vector2(CardWidth - 60f, 26f));
     }
@@ -635,24 +672,39 @@ public class MainMenu : MonoBehaviour
     }
 
     /// <summary>
-    /// Builds the three squad cards from the runner's hero templates (the
-    /// same assets the battle uses) and the BATTLE button under them.
+    /// Rebuilds the three squad cards from the runner's squad slots: each
+    /// slot shows the roster's live HeroInstance for that template (level
+    /// and stats always current), a NOT OWNED hint when the hero is not in
+    /// the roster, or the old assign-a-template hint when the slot itself
+    /// is empty. The BATTLE button is built once in BuildCenterViews.
     /// </summary>
     private void BuildSquadCards()
     {
-        HeroData[] squad =
+        ClearChildren(squadCardsRoot);
+
+        HeroData[] squadSlots =
         {
             runner != null ? runner.defenseHeroData : null,
             runner != null ? runner.attackHeroData : null,
             runner != null ? runner.supportHeroData : null,
         };
 
-        for (int i = 0; i < squad.Length; i++)
+        for (int i = 0; i < squadSlots.Length; i++)
         {
-            BuildHeroCard(homeView.transform, squad[i], i);
+            HeroData slotTemplate = squadSlots[i];
+            HeroRoster roster = runner != null ? runner.Roster : null;
+            HeroInstance hero = slotTemplate != null && roster != null ? roster.FindByData(slotTemplate) : null;
+            BuildHeroCard(squadCardsRoot, hero, slotTemplate, i);
         }
+    }
 
-        BuildBattleButton();
+    /// <summary>Destroys all children of a rect (used to rebuild the squad cards).</summary>
+    private static void ClearChildren(RectTransform parent)
+    {
+        for (int i = parent.childCount - 1; i >= 0; i--)
+        {
+            Destroy(parent.GetChild(i).gameObject);
+        }
     }
 
     /// <summary>

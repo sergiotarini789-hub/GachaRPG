@@ -113,6 +113,13 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>The runtime Summon screen, created on first open and reused afterwards.</summary>
     private SummonScreen summonScreen;
 
+    /// <summary>
+    /// The player's placeholder progression resources (gold, ascension
+    /// materials, skill materials); persisted with the roster. Ascension,
+    /// skill upgrades, and the LEVEL UP exchange consume from it.
+    /// </summary>
+    private PlayerWallet wallet;
+
     /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
     private bool battleRunning;
 
@@ -203,9 +210,10 @@ public class BattleTestRunner : MonoBehaviour
 
     private void Start()
     {
-        // The roster (the player's owned heroes) exists in both modes; the
-        // Heroes collection screen reads it from the main menu.
-        BuildInitialRoster();
+        // The roster (the player's owned heroes) and wallet load from the
+        // local save when one exists, and fall back to the initial grant
+        // otherwise; the Heroes collection reads the roster from the menu.
+        LoadProfile();
 
         // The summon system draws new owned heroes from the same templates
         // and adds them to the roster.
@@ -359,6 +367,87 @@ public class BattleTestRunner : MonoBehaviour
         {
             catalog.Add(template);
         }
+    }
+
+    /// <summary>
+    /// Loads the player profile from the local save, or builds the initial
+    /// grant when no valid save exists, then migrates any pre-souls
+    /// duplicate roster entries safely. The wallet always exists so
+    /// progression actions have something to consume from.
+    /// </summary>
+    private void LoadProfile()
+    {
+        SavedProfile save = PlayerSaveSystem.Load();
+        if (save != null)
+        {
+            roster = PlayerSaveSystem.RestoreRoster(save, BuildSummonCatalog());
+            wallet = PlayerSaveSystem.RestoreWallet(save);
+        }
+        else
+        {
+            BuildInitialRoster();
+            wallet = new PlayerWallet(
+                HeroProgression.StartingGold,
+                HeroProgression.StartingAscensionMaterials,
+                HeroProgression.StartingSkillMaterials);
+        }
+
+        // Safe migration for data created before duplicates became souls.
+        roster.ConsolidateDuplicates();
+    }
+
+    /// <summary>The player's placeholder resource wallet; progression actions consume from it.</summary>
+    public PlayerWallet Wallet => wallet;
+
+    /// <summary>
+    /// Persists the roster and wallet immediately. Called after every
+    /// progression change (level up, ascend, awaken, skill upgrade, summon,
+    /// debug actions) and on quit, so progression always survives a restart.
+    /// </summary>
+    public void SaveProfile()
+    {
+        if (roster != null && wallet != null)
+        {
+            PlayerSaveSystem.Save(roster, wallet);
+        }
+    }
+
+    private void OnApplicationQuit()
+    {
+        SaveProfile();
+    }
+
+    /// <summary>
+    /// Builds the player's battle team from the roster: for each squad slot
+    /// (defense, support, attack - the same deliberate order as
+    /// BuildMixedTeam) the owned instance's combat clone carries the hero's
+    /// real progression (level, ascension, awakening, skill levels) into
+    /// battle, so combat always uses the current calculated state. Slots
+    /// whose template the player does not own field a fresh level-1
+    /// instance exactly like before. The roster's authoritative instances
+    /// are never mutated by the battle - only their clones are.
+    /// </summary>
+    private Team BuildPlayerTeam()
+    {
+        var team = new Team();
+        AddPlayerHero(team, defenseHeroData);
+        AddPlayerHero(team, supportHeroData);
+        AddPlayerHero(team, attackHeroData);
+        return team;
+    }
+
+    /// <summary>Fields one squad slot: the owned hero's combat clone, or a fresh fallback instance.</summary>
+    private void AddPlayerHero(Team team, HeroData template)
+    {
+        if (template == null)
+        {
+            return;
+        }
+
+        HeroInstance owned = roster != null ? roster.FindByData(template) : null;
+        HeroInstance hero = owned != null ? owned.CreateCombatClone() : new HeroInstance(template);
+        hero.displayName = template.heroName;
+        team.Add(hero);
     }
 
     /// <summary>
@@ -671,9 +760,11 @@ public class BattleTestRunner : MonoBehaviour
 
         if (heroKit)
         {
-            // Prototype battle: both teams field the same three named heroes,
-            // one per role; slot order is set inside BuildMixedTeam.
-            team1 = BuildMixedTeam(attackHeroData, defenseHeroData, supportHeroData, prefix: string.Empty);
+            // Prototype battle: the player's team fields the roster's real
+            // instances (as combat clones carrying live progression - see
+            // BuildPlayerTeam); the enemy team fields fresh copies of the
+            // same three named heroes, one per role.
+            team1 = BuildPlayerTeam();
             team2 = BuildMixedTeam(attackHeroData, defenseHeroData, supportHeroData, prefix: "Enemy ");
         }
         else

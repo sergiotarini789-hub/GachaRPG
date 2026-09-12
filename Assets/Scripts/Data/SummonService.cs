@@ -16,11 +16,16 @@ using UnityEngine;
 /// constructing their own service instance - without rewriting the Heroes
 /// Collection or any other system.
 ///
-/// Invariants: <see cref="HeroData"/> templates are never modified; every
-/// summon creates a separate, independent <see cref="HeroInstance"/>
-/// (duplicates of the same template are distinct owned heroes, never
-/// merged or overwritten); the roster is the single owner of the created
-/// instances.
+/// Duplicate handling: when the player already owns the rolled hero's
+/// template, NO second owned instance is created - the duplicate converts
+/// into Hero Souls banked on the existing instance (see
+/// <see cref="HeroRoster.ConsolidateDuplicates"/> for migrating older
+/// duplicate rosters). First-time heroes are brand-new, independent
+/// instances at Level 1 / 0 XP.
+///
+/// Invariants: <see cref="HeroData"/> templates are never modified; the
+/// roster is the single owner of the created instances; souls never go
+/// negative.
 /// </summary>
 public class SummonService
 {
@@ -133,10 +138,13 @@ public class SummonService
     /// Performs one summon: rolls a rarity on the weighted table, picks a
     /// random template from that rarity's pool (walking to the next rarity
     /// with heroes when the rolled pool is empty - the fallback is logged),
-    /// creates a brand-new Level 1 / 0 XP <see cref="HeroInstance"/> from
-    /// it, and adds that instance to the roster. Returns the result for the
-    /// UI to render, or null when no hero could be summoned at all (empty
-    /// catalog or roster; the reason is logged - never thrown).
+    /// then either adds a brand-new Level 1 / 0 XP <see cref="HeroInstance"/>
+    /// to the roster (first time owning this hero) or, when the hero is
+    /// already owned, converts the duplicate into Hero Souls on the
+    /// existing instance - the original hero and its progression are never
+    /// overwritten or merged. Returns the result for the UI to render, or
+    /// null when no hero could be summoned at all (empty catalog or roster;
+    /// the reason is logged - never thrown).
     /// </summary>
     public SummonResult Summon()
     {
@@ -154,11 +162,20 @@ public class SummonService
             return null;
         }
 
+        HeroInstance owned = roster.FindByData(chosen);
+        if (owned != null)
+        {
+            // Duplicate: the hero stays owned exactly once; the copy becomes
+            // souls banked on the existing instance.
+            owned.AddSouls(HeroProgression.SoulsPerDuplicate);
+            return new SummonResult(owned, rolled, isNewHero: false);
+        }
+
         // A fresh, independent owned hero: level 1, 0 XP, its own stats and
         // cooldown state. The template is only read, never modified.
         HeroInstance hero = new HeroInstance(chosen);
         roster.Add(hero);
-        return new SummonResult(hero, rolled);
+        return new SummonResult(hero, rolled, isNewHero: true);
     }
 
     /// <summary>
@@ -233,18 +250,22 @@ public class SummonService
 }
 
 /// <summary>
-/// Outcome of one summon: the newly created owned hero (the authoritative
-/// instance the roster now holds) plus what the rarity roll produced, so
-/// the UI can show both the hero's real data and any fallback that
-/// happened.
+/// Outcome of one summon: the hero the summon resolved to (the brand-new
+/// instance for a first-time hero, or the existing owned instance that just
+/// banked the duplicate's souls), what the rarity roll produced, and
+/// whether this was a new hero or a duplicate, so the UI can show exactly
+/// what happened without opening another screen.
 /// </summary>
 public class SummonResult
 {
-    /// <summary>The brand-new HeroInstance that was just added to the roster.</summary>
+    /// <summary>The hero the summon resolved to: new instance, or the existing owner of a duplicate.</summary>
     public HeroInstance Hero { get; }
 
     /// <summary>The rarity the weighted roll selected.</summary>
     public HeroRarity RolledRarity { get; }
+
+    /// <summary>True when a brand-new HeroInstance was added to the roster; false for a duplicate (souls added).</summary>
+    public bool IsNewHero { get; }
 
     /// <summary>The rarity of the hero actually summoned (the pool that was used).</summary>
     public HeroRarity ActualRarity => Hero != null && Hero.data != null ? Hero.data.rarity : RolledRarity;
@@ -252,9 +273,10 @@ public class SummonResult
     /// <summary>True when the rolled rarity had no heroes and a fallback pool was used.</summary>
     public bool FallbackUsed => ActualRarity != RolledRarity;
 
-    public SummonResult(HeroInstance hero, HeroRarity rolledRarity)
+    public SummonResult(HeroInstance hero, HeroRarity rolledRarity, bool isNewHero)
     {
         Hero = hero;
         RolledRarity = rolledRarity;
+        IsNewHero = isNewHero;
     }
 }

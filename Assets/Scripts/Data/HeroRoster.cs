@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using UnityEngine;
 
 /// <summary>
 /// The player's owned heroes: the authoritative collection of live
@@ -35,5 +36,83 @@ public class HeroRoster
         {
             heroes.Add(hero);
         }
+    }
+
+    /// <summary>
+    /// The player's instance of a template, or null when the hero is not
+    /// owned. With duplicate-to-souls summoning there is normally exactly
+    /// one primary instance per template.
+    /// </summary>
+    public HeroInstance FindByData(HeroData data)
+    {
+        if (data == null)
+        {
+            return null;
+        }
+
+        foreach (HeroInstance hero in heroes)
+        {
+            if (hero != null && hero.data == data)
+            {
+                return hero;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>Whether the player owns at least one instance of the template.</summary>
+    public bool Owns(HeroData data)
+    {
+        return FindByData(data) != null;
+    }
+
+    /// <summary>
+    /// Safe migration for rosters created before duplicates became souls:
+    /// keeps one primary instance per template - the most progressed (the
+    /// highest level, ties keep the earlier slot) - and converts every
+    /// extra instance into Hero Souls on that primary, so no level, XP,
+    /// ascension, or awakening is ever lost. Returns how many duplicates
+    /// were converted.
+    /// </summary>
+    public int ConsolidateDuplicates()
+    {
+        int converted = 0;
+        for (int i = 0; i < heroes.Count; i++)
+        {
+            HeroInstance primary = heroes[i];
+            if (primary == null)
+            {
+                continue;
+            }
+
+            for (int j = heroes.Count - 1; j > i; j--)
+            {
+                HeroInstance other = heroes[j];
+                if (other == null || other.data != primary.data)
+                {
+                    continue;
+                }
+
+                // Keep the most progressed instance as the primary.
+                if (other.Level > primary.Level)
+                {
+                    heroes[i] = other;
+                    heroes[j] = primary;
+                    primary = other;
+                }
+
+                heroes.RemoveAt(j);
+                primary.AddSouls(HeroProgression.SoulsPerDuplicate);
+                converted++;
+            }
+        }
+
+        if (converted > 0)
+        {
+            Debug.Log("HeroRoster: consolidated " + converted + " duplicate hero(s) into Hero Souls.");
+        }
+
+        return converted;
     }
 }
