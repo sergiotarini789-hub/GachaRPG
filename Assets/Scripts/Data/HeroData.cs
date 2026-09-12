@@ -76,15 +76,25 @@ public class HeroData : ScriptableObject
     /// <summary>
     /// This hero's constellation configuration: one entry per rank C1..C6,
     /// in rank order (index 0 = C1). Constellation ranks are gained from
-    /// duplicate copies of this hero (the first copy is C0, the seventh is
-    /// C6 - the hard cap); each step describes that rank's effect. Effects
-    /// are data + display only until a combat effect system exists (see
-    /// <see cref="ConstellationStep"/>). An empty list falls back to
+    /// duplicate copies of this hero (the first copy is C0, and every
+    /// duplicate raises the rank by one up to <see cref="maxConstellation"/>
+    /// - the hard cap); each step carries that rank's STAT BONUSES (applied
+    /// for real by <see cref="HeroInstance.CalculateCurrentStats"/>) plus an
+    /// optional future skill-modifier hook. An empty list falls back to
     /// <see cref="HeroProgression.DefaultConstellationSteps"/> (logged once
     /// per hero), so every hero has constellation data without editing
     /// assets; author entries here to give this hero unique effects.
     /// </summary>
     public List<ConstellationStep> constellationSteps = new List<ConstellationStep>();
+
+    /// <summary>
+    /// The highest constellation rank THIS hero can reach (C0 = base hero).
+    /// Defaults to the standard 6; the global hard cap
+    /// (<see cref="HeroProgression.MaxConstellationRank"/>) still applies,
+    /// so a future hero could ship with fewer ranks but never more than 6.
+    /// Duplicates past this rank convert into Hero Tokens.
+    /// </summary>
+    public int maxConstellation = 6;
 }
 
 /// <summary>
@@ -137,23 +147,19 @@ public class AwakeningStep
 /// <summary>
 /// One constellation rank's data-driven configuration (C1..C6). Ranks are
 /// gained from duplicate copies of the same hero: the first copy is C0,
-/// every duplicate raises the rank by one, and C6 is the hard cap (extra
-/// duplicates become Hero Tokens). Each step is independently configurable
-/// per hero through <see cref="HeroData.constellationSteps"/>, so two
-/// heroes never have to share the same constellation layout.
+/// every duplicate raises the rank by one, and the cap is the hero's
+/// <see cref="HeroData.maxConstellation"/> (extras become Hero Tokens).
+/// Each step is independently configurable per hero through
+/// <see cref="HeroData.constellationSteps"/>, so two heroes never have to
+/// share the same constellation layout.
 ///
-/// effectType/targetSkillId/effectValue describe WHAT the rank will do
-/// once a combat effect system exists. They are placeholder design data
-/// only: no combat code consumes them yet, the UI displays them as
-/// planned, and nothing in this milestone claims they function. Recognized
-/// effectType values (future integration hooks, extend freely):
-/// "none" (no effect), "skillDamage" (the skill deals increased damage),
-/// "addEffect" (the skill gains a secondary effect), "skillLevel" (raises
-/// the skill's level), "defenseIgnore" (the skill partially ignores enemy
-/// DEF), "extraAttack" (adds an extra attack), "cooldown" (reduces the
-/// skill's cooldown), "targeting" (changes targeting behavior), "passive"
-/// (grants or modifies a passive), "coreEnhancement" (major change to the
-/// hero's core mechanic), or any future author-defined kind.
+/// The statBonusPercent fields are REAL: every reached rank's bonuses are
+/// summed and applied by <see cref="HeroInstance.CalculateCurrentStats"/>
+/// (deterministically, from base + level growth - never compounded on
+/// already-modified values). effectType/targetSkillId/effectValue are the
+/// OPTIONAL FUTURE SKILL-MODIFIER hook (e.g. "skillLevel",
+/// "defenseIgnore", "cooldown"): they are placeholder design data only - no
+/// combat code consumes them yet, and nothing claims they function.
 /// </summary>
 [Serializable]
 public class ConstellationStep
@@ -161,9 +167,21 @@ public class ConstellationStep
     /// <summary>Display name, e.g. "C1".</summary>
     public string displayName = "";
 
-    /// <summary>Player-facing description of what this rank grants (placeholder text for now).</summary>
+    /// <summary>Player-facing description of what this rank grants.</summary>
     [TextArea]
     public string description = "";
+
+    /// <summary>Percent bonus to max health granted at this rank.</summary>
+    public float healthBonusPercent;
+
+    /// <summary>Percent bonus to attack granted at this rank.</summary>
+    public float attackBonusPercent;
+
+    /// <summary>Percent bonus to defense granted at this rank.</summary>
+    public float defenseBonusPercent;
+
+    /// <summary>Percent bonus to speed granted at this rank.</summary>
+    public float speedBonusPercent;
 
     /// <summary>The effect kind this rank will apply (future combat hook; see the class remarks). "none" = undecided.</summary>
     public string effectType = "none";

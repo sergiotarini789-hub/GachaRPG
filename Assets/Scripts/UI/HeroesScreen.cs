@@ -34,7 +34,7 @@ using UnityEngine.UI;
 ///   hero's and wallet's real state and performs the operation through the
 ///   HeroInstance progression APIs, never fake interactions;
 /// - a clearly marked DEBUG tool column (development only): add XP, add
-///   gold, apply a duplicate (the exact path a duplicate summon takes),
+///   gold, +1 constellation (the exact path a duplicate summon takes),
 ///   add Awakening Materials / Hero Tokens, and reset the selected hero's
 ///   progression.
 ///
@@ -556,29 +556,15 @@ public class HeroesScreen : MonoBehaviour
                 + " (" + AwakeningBonusText(nextStep) + ")"
             : "AWAKENING  " + hero.Awakening + " / " + hero.MaxAwakeningRank + "   (MAX)";
 
-        // Constellation rank (duplicate-driven progression; C6 is the hard
-        // cap) plus the next rank's planned effect. Constellation effects
-        // are placeholder design data: displayed as planned, not applied in
-        // combat yet.
-        ConstellationStep nextConstellation = hero.NextConstellationStep();
-        constellationLine.text = hero.IsMaxConstellation
-            ? "MAX CONSTELLATION  " + HeroProgression.ConstellationLabel(hero.Constellation)
-            : "CONSTELLATION  " + HeroProgression.ConstellationLabel(hero.Constellation)
-                + " / " + HeroProgression.ConstellationLabel(hero.MaxConstellation);
-
-        if (hero.IsMaxConstellation)
-        {
-            constellationDetail.text = "All constellation ranks unlocked.";
-        }
-        else if (nextConstellation != null && !string.IsNullOrEmpty(nextConstellation.description))
-        {
-            constellationDetail.text = "Next " + HeroProgression.ConstellationLabel(hero.Constellation + 1)
-                + ": " + nextConstellation.description + " (planned)";
-        }
-        else
-        {
-            constellationDetail.text = string.Empty;
-        }
+        // Constellation rank (duplicate-driven progression; the hero's cap
+        // is hard) plus the full per-rank bonus list, read live from the
+        // hero's constellation data: reached ranks gold, unreached ranks
+        // dimmed, so the current rank is instantly identifiable. The stat
+        // bonuses listed are the real ones CalculateCurrentStats applies.
+        constellationLine.text = (hero.IsMaxConstellation ? "MAX CONSTELLATION  " : "CONSTELLATION  ")
+            + HeroProgression.ConstellationLabel(hero.Constellation)
+            + " / " + HeroProgression.ConstellationLabel(hero.MaxConstellation);
+        constellationDetail.text = ConstellationBonusList(hero);
 
         // Current stats straight off the instance.
         detailStatHp.text = StatLine("HP", hero.currentHealth + " / " + hero.maxHealth);
@@ -667,6 +653,74 @@ public class HeroesScreen : MonoBehaviour
         if (step.defenseBonusPercent != 0f) text.Append("+").Append(step.defenseBonusPercent).Append("% DEF ");
         if (step.speedBonusPercent != 0f) text.Append("+").Append(step.speedBonusPercent).Append("% SPD");
         return text.Length > 0 ? text.ToString().TrimEnd() : (string.IsNullOrEmpty(step.description) ? "no bonuses" : step.description);
+    }
+
+    /// <summary>
+    /// The hero's full constellation bonus list ("C1 +5% ATK | C2 +5% HP | ..."),
+    /// built live from the hero's constellation steps: ranks already reached
+    /// are gold, unreached ranks are dimmed, so the current constellation is
+    /// visually identifiable at a glance. The stat bonuses shown are the real
+    /// ones the stat pipeline applies.
+    /// </summary>
+    private static string ConstellationBonusList(HeroInstance hero)
+    {
+        const string ReachedColor = "<color=#E6B859>";
+        const string LockedColor = "<color=#7A828C>";
+
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        for (int rank = 1; rank <= hero.MaxConstellation; rank++)
+        {
+            if (text.Length > 0)
+            {
+                text.Append(" | ");
+            }
+
+            ConstellationStep step = hero.GetConstellationStep(rank);
+            string bonus = ConstellationBonusText(step);
+            text.Append(hero.Constellation >= rank ? ReachedColor : LockedColor)
+                .Append(HeroProgression.ConstellationLabel(rank))
+                .Append(string.IsNullOrEmpty(bonus) ? string.Empty : " " + bonus)
+                .Append("</color>");
+        }
+
+        return text.ToString();
+    }
+
+    /// <summary>
+    /// Short text of one constellation step's real stat bonuses
+    /// ("+5% ATK" or "+10% HP / +10% ATK"); a step without stat bonuses
+    /// falls back to its authored description (future skill-modifier
+    /// ranks), or empty.
+    /// </summary>
+    private static string ConstellationBonusText(ConstellationStep step)
+    {
+        if (step == null)
+        {
+            return string.Empty;
+        }
+
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        AppendBonus(text, "HP", step.healthBonusPercent);
+        AppendBonus(text, "ATK", step.attackBonusPercent);
+        AppendBonus(text, "DEF", step.defenseBonusPercent);
+        AppendBonus(text, "SPD", step.speedBonusPercent);
+        return text.Length > 0 ? text.ToString() : step.description;
+    }
+
+    /// <summary>Appends "+X% label" with " / " separators, skipping zero bonuses.</summary>
+    private static void AppendBonus(System.Text.StringBuilder text, string label, float percent)
+    {
+        if (percent == 0f)
+        {
+            return;
+        }
+
+        if (text.Length > 0)
+        {
+            text.Append(" / ");
+        }
+
+        text.Append("+").Append(percent).Append("% ").Append(label);
     }
 
     // ---------------------------------------------------------------------
@@ -810,10 +864,10 @@ public class HeroesScreen : MonoBehaviour
                 SetStatus("DEBUG: new hero added at C0.");
                 break;
             case DuplicateResult.MaxConstellationExtra:
-                SetStatus("DEBUG: extra duplicate past C6 - +" + HeroProgression.HeroTokensPerExtraDuplicate + " Hero Token.");
+                SetStatus("DEBUG: max constellation - +" + HeroProgression.MaxConstellationDuplicateTokenReward + " Hero Tokens.");
                 break;
             default:
-                SetStatus("DEBUG: duplicate applied - constellation " + HeroProgression.ConstellationLabel(hero.Constellation) + ".");
+                SetStatus("DEBUG: +1 constellation - now " + HeroProgression.ConstellationLabel(hero.Constellation) + ".");
                 break;
         }
 
@@ -1121,7 +1175,7 @@ public class HeroesScreen : MonoBehaviour
 
         BuildDebugButton(controls, "DebugXp", "+1000 XP", 0f, -366f, OnDebugAddXp);
         BuildDebugButton(controls, "DebugGold", "+10K GOLD", 174f, -366f, OnDebugAddGold);
-        BuildDebugButton(controls, "DebugDuplicate", "ADD DUPLICATE", 0f, -420f, OnDebugAddDuplicate);
+        BuildDebugButton(controls, "DebugDuplicate", "+1 CONSTELLATION", 0f, -420f, OnDebugAddDuplicate);
         BuildDebugButton(controls, "DebugAwakenMats", "+50 AWAK MATS", 174f, -420f, OnDebugAddAwakeningMaterials);
         BuildDebugButton(controls, "DebugTokens", "+10 TOKENS", 0f, -474f, OnDebugAddTokens);
         BuildDebugButton(controls, "DebugReset", "RESET HERO", 174f, -474f, OnDebugResetHero);
@@ -1304,23 +1358,30 @@ public class HeroesScreen : MonoBehaviour
             TopLeft, TopLeft, new Vector2(152f, -24f), new Vector2(330f, 34f));
 
         CreateSlicedImage(card, "LevelBadge", BadgeColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(152f, -70f), new Vector2(84f, 28f));
+            TopLeft, TopLeft, new Vector2(152f, -70f), new Vector2(64f, 28f));
         CreateText(card, "LevelText", "Lv " + hero.Level,
             CardBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(152f, -70f), new Vector2(84f, 28f)).color = GoldAccent;
+            TopLeft, TopLeft, new Vector2(152f, -70f), new Vector2(64f, 28f)).color = GoldAccent;
 
         CreateSlicedImage(card, "RarityBadge", Color.Lerp(rarity.Color, Color.black, 0.72f), panelSprite,
-            TopLeft, TopLeft, new Vector2(248f, -70f), new Vector2(104f, 28f));
+            TopLeft, TopLeft, new Vector2(226f, -70f), new Vector2(96f, 28f));
         CreateText(card, "RarityText", rarity.Label,
             CardBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(248f, -70f), new Vector2(104f, 28f))
+            TopLeft, TopLeft, new Vector2(226f, -70f), new Vector2(96f, 28f))
             .color = Color.Lerp(rarity.Color, Color.white, 0.25f);
 
         CreateSlicedImage(card, "RoleBadge", BadgeColor, panelSprite,
-            TopLeft, TopLeft, new Vector2(364f, -70f), new Vector2(110f, 28f));
+            TopLeft, TopLeft, new Vector2(332f, -70f), new Vector2(100f, 28f));
         CreateText(card, "RoleText", RoleLabel(data.role),
             CardBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
-            TopLeft, TopLeft, new Vector2(364f, -70f), new Vector2(110f, 28f)).color = DimTextColor;
+            TopLeft, TopLeft, new Vector2(332f, -70f), new Vector2(100f, 28f)).color = DimTextColor;
+
+        // Constellation badge: the hero's duplicate-progression rank (C0-C6).
+        CreateSlicedImage(card, "ConstellationBadge", BadgeColor, panelSprite,
+            TopLeft, TopLeft, new Vector2(442f, -70f), new Vector2(52f, 28f));
+        CreateText(card, "ConstellationText", HeroProgression.ConstellationLabel(hero.Constellation),
+            CardBadgeFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            TopLeft, TopLeft, new Vector2(442f, -70f), new Vector2(52f, 28f)).color = GoldAccent;
 
         // Clickable card: the backdrop is the raycast target (the image
         // factory disables raycast targets for decoration).

@@ -8,9 +8,9 @@ using UnityEngine;
 /// state - level, experience, ascension rank, awakening rank, constellation
 /// rank (C0-C6, one per duplicate copy of this hero), and per-skill levels -
 /// and derives its combat stats from the template's base stats plus its
-/// <see cref="HeroGrowth"/> curve and the ascension / awakening modifiers
-/// (see <see cref="CalculateCurrentStats"/>). The template asset never
-/// changes: progression mutates only this instance.
+/// <see cref="HeroGrowth"/> curve and the ascension, awakening, and
+/// constellation modifiers (see <see cref="CalculateCurrentStats"/>). The
+/// template asset never changes: progression mutates only this instance.
 ///
 /// The effective maximum level is ascension-controlled (see
 /// <see cref="MaxLevel"/>); duplicate summons of the same template raise the
@@ -74,11 +74,11 @@ public class HeroInstance
     private int awakeningRank;
 
     /// <summary>
-    /// Constellation rank (0..HeroProgression.MaxConstellationRank, i.e. C0-C6):
-    /// one rank per duplicate copy of this hero. C0 = obtained but no
-    /// duplicates; C6 is the hard cap. NEVER mutated directly - duplicates
-    /// flow through <see cref="ApplyDuplicate"/>, the single authoritative
-    /// path.
+    /// Constellation rank (0..this hero's <see cref="MaxConstellation"/>,
+    /// i.e. C0-C6): one rank per duplicate copy of this hero. C0 = obtained
+    /// but no duplicates; the cap is hard and per-hero. NEVER mutated
+    /// directly - duplicates flow through <see cref="ApplyDuplicate"/>, the
+    /// single authoritative path.
     /// </summary>
     private int constellationRank;
 
@@ -121,11 +121,18 @@ public class HeroInstance
     /// </summary>
     public int Constellation => constellationRank;
 
-    /// <summary>The highest constellation rank any hero can reach (C6, the hard cap).</summary>
-    public int MaxConstellation => HeroProgression.MaxConstellationRank;
+    /// <summary>
+    /// The highest constellation rank THIS hero can reach: the template's
+    /// authored <see cref="HeroData.maxConstellation"/> (default 6),
+    /// clamped to the global hard cap. Duplicates past this rank convert
+    /// into Hero Tokens.
+    /// </summary>
+    public int MaxConstellation => Mathf.Clamp(
+        data != null ? data.maxConstellation : HeroProgression.MaxConstellationRank,
+        0, HeroProgression.MaxConstellationRank);
 
-    /// <summary>Whether this hero has reached the C6 constellation cap.</summary>
-    public bool IsMaxConstellation => constellationRank >= HeroProgression.MaxConstellationRank;
+    /// <summary>Whether this hero has reached its constellation cap.</summary>
+    public bool IsMaxConstellation => constellationRank >= MaxConstellation;
 
     /// <summary>The highest awakening rank this hero can reach (0 when no steps exist).</summary>
     public int MaxAwakeningRank => awakeningSteps.Length;
@@ -254,12 +261,16 @@ public class HeroInstance
     /// <summary>
     /// Recomputes current stats through the single modifier pipeline:
     /// base + per-level growth (exactly as before), then multiplied by the
-    /// ascension bonus (per rank) and the accumulated awakening bonuses
-    /// (per reached rank). Future modifiers (equipment, weapons, artifacts,
-    /// buffs) extend this same method. With no ascension and no awakening
-    /// the values are identical to the raw growth-curve results. Current
-    /// health is clamped to the new maximum, so gaining progression never
-    /// reduces health.
+    /// ascension bonus (per rank) and the accumulated awakening AND
+    /// constellation bonuses (each summed per reached rank). The whole
+    /// calculation is deterministic from the template's base stats plus
+    /// this instance's progression state - it never reads or mutates the
+    /// previously calculated values, so refreshing the UI can never
+    /// compound bonuses. Future modifiers (equipment, weapons, artifacts,
+    /// buffs) extend this same method. With no ascension, awakening, or
+    /// constellations the values are identical to the raw growth-curve
+    /// results. Current health is clamped to the new maximum, so gaining
+    /// progression never reduces health.
     /// </summary>
     public void CalculateCurrentStats()
     {
@@ -275,17 +286,49 @@ public class HeroInstance
         // Ascension modifier: +StatBonusPercentPerAscension per rank.
         float ascensionMultiplier = 1f + HeroProgression.StatBonusPercentPerAscension * 0.01f * ascensionRank;
 
-        // Awakening modifier: the summed percent bonuses of every reached rank.
+        // Awakening + constellation modifiers: the summed percent bonuses of
+        // every reached rank of each system (both feed the same percent
+        // term, so their bonuses stack additively with each other).
         GetAwakeningBonuses(out float healthBonus, out float attackBonus, out float defenseBonus, out float speedBonus);
+        GetConstellationBonuses(out float constellationHealth, out float constellationAttack, out float constellationDefense, out float constellationSpeed);
 
-        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + healthBonus * 0.01f)));
-        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + attackBonus * 0.01f)));
-        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + defenseBonus * 0.01f)));
-        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + speedBonus * 0.01f)));
+        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + (healthBonus + constellationHealth) * 0.01f)));
+        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + (attackBonus + constellationAttack) * 0.01f)));
+        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + (defenseBonus + constellationDefense) * 0.01f)));
+        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + (speedBonus + constellationSpeed) * 0.01f)));
 
         if (currentHealth > maxHealth)
         {
             currentHealth = maxHealth;
+        }
+    }
+
+    /// <summary>
+    /// Sums the stat bonuses of every reached constellation rank (percent
+    /// values) - the constellation counterpart of
+    /// <see cref="GetAwakeningBonuses"/>. Steps beyond this hero's cap are
+    /// never counted.
+    /// </summary>
+    private void GetConstellationBonuses(out float health, out float attack, out float defense, out float speed)
+    {
+        health = 0f;
+        attack = 0f;
+        defense = 0f;
+        speed = 0f;
+
+        int ranks = Mathf.Min(constellationRank, constellationSteps.Length, MaxConstellation);
+        for (int i = 0; i < ranks; i++)
+        {
+            ConstellationStep step = constellationSteps[i];
+            if (step == null)
+            {
+                continue;
+            }
+
+            health += step.healthBonusPercent;
+            attack += step.attackBonusPercent;
+            defense += step.defenseBonusPercent;
+            speed += step.speedBonusPercent;
         }
     }
 
@@ -380,22 +423,22 @@ public class HeroInstance
     /// THE single authoritative path every duplicate of this hero takes
     /// (summon duplicates, the roster's debug duplicate tool, and duplicate
     /// consolidation all flow through here - never poke the rank directly).
-    /// Advances the constellation by exactly one rank and never past C6.
-    /// Returns true when the rank advanced; returns false - changing
-    /// nothing - when the hero is already at C6, in which case the caller
-    /// converts the extra duplicate into Hero Tokens (see
-    /// <see cref="HeroRoster.ApplyDuplicate"/>). Constellation steps are
-    /// data + display only for now: no combat effect system consumes them
-    /// yet, so this does not recalculate stats.
+    /// Advances the constellation by exactly one rank, never past this
+    /// hero's cap, and recalculates stats so the new rank's bonuses apply
+    /// immediately. Returns true when the rank advanced; returns false -
+    /// changing nothing - when the hero is already at its cap, in which
+    /// case the caller converts the extra duplicate into Hero Tokens (see
+    /// <see cref="HeroRoster.ApplyDuplicate"/>).
     /// </summary>
     public bool ApplyDuplicate()
     {
-        if (constellationRank >= HeroProgression.MaxConstellationRank)
+        if (constellationRank >= MaxConstellation)
         {
-            return false; // C6 is the hard cap; the caller converts the extra duplicate.
+            return false; // the cap is hard; the caller converts the extra duplicate.
         }
 
         constellationRank++;
+        CalculateCurrentStats();
         return true;
     }
 
@@ -403,6 +446,17 @@ public class HeroInstance
     public ConstellationStep NextConstellationStep()
     {
         return constellationRank < constellationSteps.Length ? constellationSteps[constellationRank] : null;
+    }
+
+    /// <summary>
+    /// The configuration of the given 1-based constellation rank (C1 = 1),
+    /// or null when that rank has no step data (read by the Heroes screen's
+    /// bonus list).
+    /// </summary>
+    public ConstellationStep GetConstellationStep(int rank)
+    {
+        int index = rank - 1;
+        return index >= 0 && index < constellationSteps.Length ? constellationSteps[index] : null;
     }
 
     // ---------------------------------------------------------------------
@@ -678,7 +732,7 @@ public class HeroInstance
 
         ascensionRank = Mathf.Clamp(saved.ascension, 0, HeroProgression.MaxAscensionRank);
         awakeningRank = Mathf.Clamp(saved.awakening, 0, awakeningSteps.Length);
-        constellationRank = Mathf.Clamp(saved.constellation, 0, HeroProgression.MaxConstellationRank);
+        constellationRank = Mathf.Clamp(saved.constellation, 0, MaxConstellation);
         Level = Mathf.Clamp(saved.level, 1, MaxLevel);
         Experience = IsMaxLevel ? 0 : Mathf.Max(0, saved.experience);
 

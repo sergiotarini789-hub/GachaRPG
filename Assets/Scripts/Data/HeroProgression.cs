@@ -80,8 +80,13 @@ public static class HeroProgression
     /// </summary>
     public const int MaxConstellationRank = 6;
 
-    /// <summary>How many Hero Tokens one extra duplicate of a C6 hero converts into.</summary>
-    public const int HeroTokensPerExtraDuplicate = 1;
+    /// <summary>
+    /// How many Hero Tokens one extra duplicate of a max-constellation (C6)
+    /// hero converts into. The single configurable source for the reward:
+    /// the roster's duplicate rule and every UI read it from here, never a
+    /// second hardcoded copy.
+    /// </summary>
+    public const int MaxConstellationDuplicateTokenReward = 10;
 
     /// <summary>
     /// Display label of a constellation rank ("C0" .. "C6"), clamped to the
@@ -190,15 +195,14 @@ public static class HeroProgression
 
     /// <summary>
     /// The shared fallback constellation configuration for heroes without
-    /// authored <see cref="HeroData.constellationSteps"/>: six placeholder
-    /// steps (C1-C6) whose descriptions are generated from the hero's own
-    /// skill kit, mirroring the design sketch for Kael Stormblade (C1
-    /// skill damage, C2 additional effect, C3 skill level, C4 defense
-    /// ignore, C5 second skill/passive, C6 core enhancement). These are
-    /// PLACEHOLDER DESIGN VALUES - effect data only; no combat code
-    /// consumes them yet. A development warning is logged once per hero so
-    /// missing authored data stays visible; author constellation steps on
-    /// the HeroData asset to give a hero unique effects.
+    /// authored <see cref="HeroData.constellationSteps"/>: the standard
+    /// generic stat progression - C1 +5% ATK, C2 +5% HP, C3 +5% DEF,
+    /// C4 +5% SPD, C5 +10% ATK, C6 +10% HP and +10% ATK. These bonuses are
+    /// REAL: they are summed per reached rank and applied by
+    /// <see cref="HeroInstance.CalculateCurrentStats"/>. A development
+    /// warning is logged once per hero so missing authored data stays
+    /// visible; author constellation steps on the HeroData asset to give a
+    /// hero unique effects (including the future skill-modifier hook).
     /// </summary>
     public static ConstellationStep[] DefaultConstellationSteps(HeroData forHero)
     {
@@ -206,14 +210,9 @@ public static class HeroProgression
         if (heroesUsingDefaultConstellationSteps.Add(heroId))
         {
             Debug.LogWarning("HeroProgression: '" + heroId + "' has no authored constellationSteps; " +
-                "using the shared default steps (placeholder effects generated from the hero's kit). " +
+                "using the shared default steps (+5% ATK / +5% HP / +5% DEF / +5% SPD / +10% ATK / +10% HP +10% ATK). " +
                 "Assign constellation steps on the HeroData asset to customize.");
         }
-
-        SkillData primarySkill = FirstSkill(forHero, 0);
-        SkillData secondarySkill = FirstSkill(forHero, 1);
-        string primaryName = SkillDisplayName(primarySkill);
-        string secondaryName = SkillDisplayName(secondarySkill);
 
         ConstellationStep[] steps = new ConstellationStep[MaxConstellationRank];
         for (int i = 0; i < steps.Length; i++)
@@ -221,86 +220,37 @@ public static class HeroProgression
             steps[i] = new ConstellationStep
             {
                 displayName = ConstellationLabel(i + 1),
-                effectType = "none",
+                effectType = "none", // future skill-modifier hook; unused by the stat progression
                 targetSkillId = string.Empty,
                 effectValue = 0f,
             };
         }
 
-        // C1: the primary skill deals increased damage.
-        steps[0].effectType = "skillDamage";
-        steps[0].targetSkillId = primarySkill != null ? primarySkill.SkillId : string.Empty;
-        steps[0].effectValue = 0.25f;
-        steps[0].description = primaryName + " deals 25% increased damage";
+        // C1: +5% Attack.
+        steps[0].attackBonusPercent = 5f;
+        steps[0].description = "+5% ATK";
 
-        // C2: the primary skill gains an additional effect.
-        steps[1].effectType = "addEffect";
-        steps[1].targetSkillId = steps[0].targetSkillId;
-        steps[1].description = primaryName + " gains an additional effect";
+        // C2: +5% HP.
+        steps[1].healthBonusPercent = 5f;
+        steps[1].description = "+5% HP";
 
-        // C3: the primary skill's level increases by 2.
-        steps[2].effectType = "skillLevel";
-        steps[2].targetSkillId = steps[0].targetSkillId;
-        steps[2].effectValue = 2f;
-        steps[2].description = primaryName + " skill level +2";
+        // C3: +5% Defense.
+        steps[2].defenseBonusPercent = 5f;
+        steps[2].description = "+5% DEF";
 
-        // C4: the primary skill partially ignores enemy DEF.
-        steps[3].effectType = "defenseIgnore";
-        steps[3].targetSkillId = steps[0].targetSkillId;
-        steps[3].effectValue = 0.25f;
-        steps[3].description = primaryName + " partially ignores enemy DEF";
+        // C4: +5% Speed.
+        steps[3].speedBonusPercent = 5f;
+        steps[3].description = "+5% SPD";
 
-        // C5: another relevant skill's level, or a passive for one-skill heroes.
-        if (secondarySkill != null)
-        {
-            steps[4].effectType = "skillLevel";
-            steps[4].targetSkillId = secondarySkill.SkillId;
-            steps[4].effectValue = 1f;
-            steps[4].description = secondaryName + " skill level +1";
-        }
-        else
-        {
-            steps[4].effectType = "passive";
-            steps[4].description = "Grants an enhanced passive effect";
-        }
+        // C5: +10% Attack.
+        steps[4].attackBonusPercent = 10f;
+        steps[4].description = "+10% ATK";
 
-        // C6: a major enhancement to the hero's core mechanic.
-        steps[5].effectType = "coreEnhancement";
-        steps[5].description = "Major enhancement to this hero's core mechanic";
+        // C6: +10% HP and +10% Attack.
+        steps[5].healthBonusPercent = 10f;
+        steps[5].attackBonusPercent = 10f;
+        steps[5].description = "+10% HP / +10% ATK";
 
         return steps;
-    }
-
-    /// <summary>The hero's nth non-null kit skill (null when the kit is shorter).</summary>
-    private static SkillData FirstSkill(HeroData forHero, int index)
-    {
-        if (forHero == null || forHero.skills == null)
-        {
-            return null;
-        }
-
-        int seen = 0;
-        foreach (SkillData skill in forHero.skills)
-        {
-            if (skill == null)
-            {
-                continue;
-            }
-
-            if (seen == index)
-            {
-                return skill;
-            }
-
-            seen++;
-        }
-
-        return null;
-    }
-
-    /// <summary>A skill's display name for generated placeholder text.</summary>
-    private static string SkillDisplayName(SkillData skill)
-    {
-        return skill != null && !string.IsNullOrEmpty(skill.skillName) ? skill.skillName : "The hero's skill";
     }
 }

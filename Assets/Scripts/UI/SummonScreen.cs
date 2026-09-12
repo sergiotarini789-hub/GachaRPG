@@ -387,12 +387,14 @@ public class SummonScreen : MonoBehaviour
             case DuplicateResult.MaxConstellationExtra:
                 resultTitle.text = "MAX CONSTELLATION";
                 resultConstellationLine.text = HeroProgression.ConstellationLabel(result.ConstellationAfter)
-                    + "   +" + HeroProgression.HeroTokensPerExtraDuplicate + " Hero Token";
+                    + "   +" + HeroProgression.MaxConstellationDuplicateTokenReward + " HERO TOKENS";
                 break;
             default:
-                resultTitle.text = "DUPLICATE";
-                resultConstellationLine.text = HeroProgression.ConstellationLabel(result.ConstellationBefore)
-                    + " -> " + HeroProgression.ConstellationLabel(result.ConstellationAfter);
+                resultTitle.text = "DUPLICATE!";
+                resultConstellationLine.text = "CONSTELLATION UP   "
+                    + HeroProgression.ConstellationLabel(result.ConstellationBefore)
+                    + " -> " + HeroProgression.ConstellationLabel(result.ConstellationAfter)
+                    + "   (+1 CONSTELLATION)";
                 break;
         }
 

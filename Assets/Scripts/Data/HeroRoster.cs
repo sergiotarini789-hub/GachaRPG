@@ -130,7 +130,7 @@ public class HeroRoster
 
         if (wallet != null)
         {
-            wallet.AddHeroTokens(HeroProgression.HeroTokensPerExtraDuplicate);
+            wallet.AddHeroTokens(HeroProgression.MaxConstellationDuplicateTokenReward);
         }
 
         return DuplicateResult.MaxConstellationExtra;
