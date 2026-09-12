@@ -91,6 +91,17 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>The runtime main menu, shown when startWithMainMenu is set; battles are started from its BATTLE button.</summary>
     private MainMenu menu;
 
+    /// <summary>
+    /// The player's owned heroes: one live HeroInstance per hero, carrying
+    /// its own progression state. Built once from the same HeroData assets
+    /// the battle fields; the Heroes collection screen reads it and future
+    /// systems (gacha, save) will add to it.
+    /// </summary>
+    private HeroRoster roster;
+
+    /// <summary>The runtime Heroes collection screen, created on first open and reused afterwards.</summary>
+    private HeroesScreen heroesScreen;
+
     /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
     private bool battleRunning;
 
@@ -181,6 +192,10 @@ public class BattleTestRunner : MonoBehaviour
 
     private void Start()
     {
+        // The roster (the player's owned heroes) exists in both modes; the
+        // Heroes collection screen reads it from the main menu.
+        BuildInitialRoster();
+
         if (startWithMainMenu)
         {
             // The runtime main menu is the entry point; the battle starts
@@ -217,6 +232,76 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         battleCoroutine = StartCoroutine(RunTeamBattleRoutine());
+    }
+
+    /// <summary>The player's owned heroes; level/XP state lives on each HeroInstance.</summary>
+    public HeroRoster Roster => roster;
+
+    /// <summary>
+    /// Opens the Heroes collection from the main menu's HEROES tab: hides
+    /// the menu and shows the runtime collection screen (built once on
+    /// first open, re-activated afterwards). Pure navigation - no battle
+    /// state is touched.
+    /// </summary>
+    public void OpenHeroesCollection()
+    {
+        if (heroesScreen == null)
+        {
+            heroesScreen = HeroesScreen.Create(this);
+        }
+
+        heroesScreen.gameObject.SetActive(true);
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(false);
+        }
+    }
+
+    /// <summary>Closes the Heroes collection and returns to the main menu.</summary>
+    public void CloseHeroesCollection()
+    {
+        if (heroesScreen != null)
+        {
+            heroesScreen.gameObject.SetActive(false);
+        }
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(true);
+        }
+    }
+
+    /// <summary>
+    /// Builds the initial roster from the same HeroData assets the battle
+    /// fields (the prototype kit trio, or the legacy 1v1 pair when the trio
+    /// is not assigned): one owned HeroInstance per hero, each carrying its
+    /// own progression state. No hero names are hardcoded - swap the
+    /// Inspector assets and both the roster and the battle follow.
+    /// </summary>
+    private void BuildInitialRoster()
+    {
+        roster = new HeroRoster();
+
+        bool heroKit = attackHeroData != null && defenseHeroData != null && supportHeroData != null;
+        if (heroKit)
+        {
+            roster.Add(new HeroInstance(attackHeroData));
+            roster.Add(new HeroInstance(defenseHeroData));
+            roster.Add(new HeroInstance(supportHeroData));
+        }
+        else
+        {
+            if (hero1Data != null)
+            {
+                roster.Add(new HeroInstance(hero1Data));
+            }
+
+            if (hero2Data != null)
+            {
+                roster.Add(new HeroInstance(hero2Data));
+            }
+        }
     }
 
     /// <summary>

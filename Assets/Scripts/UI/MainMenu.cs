@@ -21,9 +21,10 @@ using UnityEngine.UI;
 ///   template assigned to the runner (portrait frame, name, level, rarity,
 ///   role, base stats) plus a prominent BATTLE button that starts the
 ///   existing battle;
-/// - a bottom navigation bar: Home / Heroes / Summon / Battle / Shop. Only
-///   Home is functional (it returns to the squad view); Heroes, Summon and
-///   Shop show a "Coming Soon" placeholder; Battle starts the battle;
+/// - a bottom navigation bar: Home / Heroes / Summon / Battle / Shop. Home
+///   returns to the squad view; Heroes opens the runtime Heroes collection
+///   screen (see HeroesScreen) through the runner; Summon and Shop show a
+///   "Coming Soon" placeholder; Battle starts the battle;
 /// - every card is fully data-driven from the assigned <see cref="HeroData"/>
 ///   assets - no hero names, stats, or rarity are hardcoded here.
 ///
@@ -330,6 +331,19 @@ public class MainMenu : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Opens the Heroes collection through the runner: the runner hides
+    /// this menu and shows its HeroesScreen; the screen's BACK button
+    /// returns here. Navigation only.
+    /// </summary>
+    private void OpenHeroes()
+    {
+        if (runner != null)
+        {
+            runner.OpenHeroesCollection();
+        }
+    }
+
     /// <summary>Switches the center view and the navigation highlight to the given tab.</summary>
     private void ShowTab(int tab)
     {
@@ -629,9 +643,9 @@ public class MainMenu : MonoBehaviour
 
     /// <summary>
     /// Builds the bottom navigation bar: Home / Heroes / Summon / Battle /
-    /// Shop. Home returns to the squad view; Heroes, Summon and Shop show the
-    /// Coming Soon placeholder; Battle starts the battle. Tabs are highlighted
-    /// when active.
+    /// Shop. Home returns to the squad view; Heroes opens the Heroes
+    /// collection screen; Summon and Shop show the Coming Soon placeholder;
+    /// Battle starts the battle. Tabs are highlighted when active.
     /// </summary>
     private void BuildBottomNav(RectTransform root)
     {
@@ -682,7 +696,7 @@ public class MainMenu : MonoBehaviour
                 button.onClick.AddListener(ShowHome);
                 break;
             case 1:
-                button.onClick.AddListener(() => ShowComingSoon(1, "Heroes"));
+                button.onClick.AddListener(OpenHeroes);
                 break;
             case 2:
                 button.onClick.AddListener(() => ShowComingSoon(2, "Summon"));
