@@ -593,7 +593,7 @@ public class HeroInstance
         HeroInstance clone = new HeroInstance(data);
         clone.displayName = displayName;
         clone.Level = Level;
-        clone.experience = experience;
+        clone.Experience = Experience;
         clone.ascensionRank = ascensionRank;
         clone.awakeningRank = awakeningRank;
         clone.souls = souls;
@@ -624,7 +624,7 @@ public class HeroInstance
         awakeningRank = Mathf.Clamp(saved.awakening, 0, awakeningSteps.Length);
         souls = Mathf.Max(0, saved.souls);
         Level = Mathf.Clamp(saved.level, 1, MaxLevel);
-        experience = IsMaxLevel ? 0 : Mathf.Max(0, saved.experience);
+        Experience = IsMaxLevel ? 0 : Mathf.Max(0, saved.experience);
 
         if (saved.skillIds != null && saved.skillLevels != null && skills != null)
         {
@@ -652,7 +652,7 @@ public class HeroInstance
     public void ResetProgression()
     {
         Level = 1;
-        experience = 0;
+        Experience = 0;
         ascensionRank = 0;
         awakeningRank = 0;
         souls = 0;
