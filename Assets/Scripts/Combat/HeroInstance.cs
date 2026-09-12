@@ -55,6 +55,33 @@ public class HeroInstance
     /// <summary>Current speed value; feeds the turn gauge each tick.</summary>
     public int currentSpeed;
 
+    /// <summary>
+    /// Crit chance, percent (0-100): the chance a damage hit becomes a
+    /// critical strike. Heroes have NO innate crit - this is granted only
+    /// by equipment, so an unequipped hero is exactly as before.
+    /// </summary>
+    public int critRate;
+
+    /// <summary>
+    /// Bonus crit damage, percent on top of the base 150% critical
+    /// multiplier (equipment-granted only; 0 = crits deal 1.5x damage).
+    /// </summary>
+    public int critDamage;
+
+    /// <summary>
+    /// Accuracy, percent - the future debuff-landing stat. Carried on the
+    /// final stat sheet and scored by equipment comparisons, but combat
+    /// integration is PENDING a debuff/status system (never faked).
+    /// </summary>
+    public int accuracy;
+
+    /// <summary>
+    /// Resistance, percent - the future debuff-resist stat. Carried on the
+    /// final stat sheet and scored by equipment comparisons, but combat
+    /// integration is PENDING a debuff/status system (never faked).
+    /// </summary>
+    public int resistance;
+
     /// <summary>Whether the hero is still alive and able to take turns.</summary>
     public bool isAlive;
 
@@ -279,8 +306,10 @@ public class HeroInstance
     /// base + per-level growth (exactly as before), then multiplied by the
     /// ascension bonus (per rank) and the accumulated awakening AND
     /// constellation bonuses (each summed per reached rank), and finally the
-    /// equipment loadout's flat bonuses (main stats, substats, set bonuses)
-    /// are added on top. The whole calculation is deterministic from the
+    /// equipment loadout's bonuses are applied - flat stats (main stats,
+    /// secondaries, set bonuses) on top of the four base stats, percent
+    /// stats (crit rate/damage, accuracy, resistance) onto their own final
+    /// fields. The whole calculation is deterministic from the
     /// template's base stats plus this instance's progression state - it
     /// never reads or mutates the previously calculated values, so
     /// refreshing the UI or re-equipping can never compound bonuses. Future
@@ -310,16 +339,22 @@ public class HeroInstance
         GetConstellationBonuses(out float constellationHealth, out float constellationAttack, out float constellationDefense, out float constellationSpeed);
 
         // Equipment modifier: flat additions on top of the percentage
-        // pipeline (main stats + substats + set bonuses), summed by the
-        // ONE central equipment calculator - never recomputed anywhere
+        // pipeline (main stats + secondary stats + set bonuses), summed by
+        // the ONE central equipment calculator - never recomputed anywhere
         // else, so bonuses cannot double-apply, and an unequipped hero
         // contributes exactly zero (stats identical to pre-equipment).
-        EquipmentStats.GetLoadoutStats(this, out int equipmentHealth, out int equipmentAttack, out int equipmentDefense, out int equipmentSpeed);
+        // Percent stats (crit and friends) are carried as-is: heroes have
+        // no innate values there, so removing gear fully reverts them.
+        EquipmentStatSet equipmentStats = EquipmentStats.GetLoadoutStats(this);
 
-        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + (healthBonus + constellationHealth) * 0.01f)) + equipmentHealth);
-        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + (attackBonus + constellationAttack) * 0.01f)) + equipmentAttack);
-        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + (defenseBonus + constellationDefense) * 0.01f)) + equipmentDefense);
-        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + (speedBonus + constellationSpeed) * 0.01f)) + equipmentSpeed);
+        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + (healthBonus + constellationHealth) * 0.01f)) + equipmentStats.hp);
+        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + (attackBonus + constellationAttack) * 0.01f)) + equipmentStats.atk);
+        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + (defenseBonus + constellationDefense) * 0.01f)) + equipmentStats.def);
+        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + (speedBonus + constellationSpeed) * 0.01f)) + equipmentStats.spd);
+        critRate = equipmentStats.critRate;
+        critDamage = equipmentStats.critDamage;
+        accuracy = equipmentStats.accuracy;
+        resistance = equipmentStats.resistance;
 
         if (currentHealth > maxHealth)
         {

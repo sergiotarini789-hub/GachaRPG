@@ -102,6 +102,9 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>The runtime Heroes collection screen, created on first open and reused afterwards.</summary>
     private HeroesScreen heroesScreen;
 
+    /// <summary>The runtime Equipment inventory screen, created on first open (from the Heroes screen) and reused afterwards.</summary>
+    private EquipmentScreen equipmentScreen;
+
     /// <summary>
     /// The summon system: rolls rarities on its weighted table, creates new
     /// HeroInstances from the catalog templates, and adds them to the
@@ -323,6 +326,33 @@ public class BattleTestRunner : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Opens the Equipment inventory screen from the Heroes screen: builds
+    /// it once on first open, re-activates afterwards, and passes the
+    /// currently selected hero as the initial equip target (the screen can
+    /// retarget any roster hero). The Equipment screen draws above the
+    /// Heroes screen; its BACK returns here - pure navigation, no battle
+    /// state is touched.
+    /// </summary>
+    public void OpenEquipmentScreen(HeroInstance targetHero)
+    {
+        if (equipmentScreen == null)
+        {
+            equipmentScreen = EquipmentScreen.Create(this);
+        }
+
+        equipmentScreen.Show(targetHero);
+    }
+
+    /// <summary>Closes the Equipment inventory screen (the Heroes screen re-appears beneath it).</summary>
+    public void CloseEquipmentScreen()
+    {
+        if (equipmentScreen != null)
+        {
+            equipmentScreen.Hide();
+        }
+    }
+
     /// <summary>The summon system; the Summon screen requests summons from it. No gacha logic lives in the UI.</summary>
     public SummonService SummonService => summonService;
 
@@ -405,21 +435,31 @@ public class BattleTestRunner : MonoBehaviour
     {
         List<EquipmentData> catalog = new List<EquipmentData>
         {
-            CreateEquipmentTemplate("trainee_blade", "Trainee Blade", EquipmentSlot.Weapon, HeroRarity.Common, EquipmentStatType.ATK, 8, 1.5f, ""),
-            CreateEquipmentTemplate("tempest_fang", "Tempest Fang", EquipmentSlot.Weapon, HeroRarity.Epic, EquipmentStatType.ATK, 15, 3f, "vanguard"),
-            CreateEquipmentTemplate("warden_helm", "Warden Helm", EquipmentSlot.Helmet, HeroRarity.Rare, EquipmentStatType.HP, 60, 8f, "vanguard"),
-            CreateEquipmentTemplate("warden_plate", "Warden Plate", EquipmentSlot.Armor, HeroRarity.Rare, EquipmentStatType.DEF, 6, 1.2f, "vanguard"),
-            CreateEquipmentTemplate("storm_gauntlets", "Storm Gauntlets", EquipmentSlot.Gloves, HeroRarity.Epic, EquipmentStatType.ATK, 10, 2f, ""),
-            CreateEquipmentTemplate("scout_boots", "Scout Boots", EquipmentSlot.Boots, HeroRarity.Common, EquipmentStatType.SPD, 2, 0.4f, ""),
-            CreateEquipmentTemplate("vanguard_signet", "Signet of the Vanguard", EquipmentSlot.Accessory, HeroRarity.Legendary, EquipmentStatType.HP, 100, 15f, "vanguard"),
+            // Base values are authored at a NEUTRAL scale: the generated
+            // item's actual primary stat is this curve times the generated
+            // rarity's multiplier (EquipmentProgression), so the factory can
+            // produce any rarity from any definition.
+            CreateEquipmentTemplate("trainee_blade", "Trainee Blade", EquipmentSlot.Weapon, HeroRarity.Common, EquipmentStatType.ATK, 8, 1.5f, "", "A blunt drill-yard blade. Everyone starts somewhere."),
+            CreateEquipmentTemplate("iron_sword", "Iron Sword", EquipmentSlot.Weapon, HeroRarity.Common, EquipmentStatType.ATK, 10, 2f, "", "Honest iron, honest edges."),
+            CreateEquipmentTemplate("knight_helm", "Knight Helm", EquipmentSlot.Helmet, HeroRarity.Rare, EquipmentStatType.HP, 48, 6f, "", "Standard issue for the royal guard."),
+            CreateEquipmentTemplate("warden_helm", "Warden Helm", EquipmentSlot.Helmet, HeroRarity.Rare, EquipmentStatType.HP, 52, 7f, "vanguard", "Part of the Vanguard regimen."),
+            CreateEquipmentTemplate("dragon_crown", "Dragon Crown", EquipmentSlot.Helmet, HeroRarity.Legendary, EquipmentStatType.HP, 67, 10f, "", "A crown cut from a dragon's own hoard."),
+            CreateEquipmentTemplate("warden_plate", "Warden Plate", EquipmentSlot.Armor, HeroRarity.Rare, EquipmentStatType.DEF, 5, 1.05f, "vanguard", "Part of the Vanguard regimen."),
+            CreateEquipmentTemplate("storm_gauntlets", "Storm Gauntlets", EquipmentSlot.Gloves, HeroRarity.Epic, EquipmentStatType.ATK, 8, 1.55f, "", "Knuckles that hum with static."),
+            CreateEquipmentTemplate("assassin_claws", "Assassin Claws", EquipmentSlot.Gloves, HeroRarity.Epic, EquipmentStatType.CRIT_RATE, 4, 0.5f, "", "Find the seam in any armor."),
+            CreateEquipmentTemplate("scout_boots", "Scout Boots", EquipmentSlot.Boots, HeroRarity.Common, EquipmentStatType.SPD, 2, 0.4f, "", "Light, worn, and quick."),
+            CreateEquipmentTemplate("tempest_fang", "Tempest Fang", EquipmentSlot.Weapon, HeroRarity.Epic, EquipmentStatType.ATK, 12, 2.3f, "vanguard", "Part of the Vanguard regimen."),
+            CreateEquipmentTemplate("stormblade", "Stormblade", EquipmentSlot.Weapon, HeroRarity.Epic, EquipmentStatType.ATK, 14, 2.5f, "", "Forged in the eye of the storm."),
+            CreateEquipmentTemplate("arcane_pendant", "Arcane Pendant", EquipmentSlot.Accessory, HeroRarity.Epic, EquipmentStatType.CRIT_DAMAGE, 5, 0.8f, "", "It thrums when blood is near."),
+            CreateEquipmentTemplate("vanguard_signet", "Signet of the Vanguard", EquipmentSlot.Accessory, HeroRarity.Legendary, EquipmentStatType.HP, 67, 10f, "vanguard", "Part of the Vanguard regimen."),
         };
         return catalog;
     }
 
     /// <summary>
-    /// Creates one runtime equipment template. Prototype content only -
-    /// main-stat/slot legality follows the central rules
-    /// (<see cref="EquipmentProgression.IsMainStatAllowed"/>), and every
+    /// Creates one runtime equipment definition. Prototype content only -
+    /// primary-stat/slot legality follows the central rules
+    /// (<see cref="EquipmentProgression.IsPrimaryStatAllowed"/>), and every
     /// field here is authored data a real asset would carry.
     /// </summary>
     private static EquipmentData CreateEquipmentTemplate(
@@ -430,7 +470,8 @@ public class BattleTestRunner : MonoBehaviour
         EquipmentStatType mainStatType,
         int mainStatBaseValue,
         float mainStatPerLevel,
-        string setId)
+        string setId,
+        string description)
     {
         EquipmentData template = ScriptableObject.CreateInstance<EquipmentData>();
         template.equipmentId = id;
@@ -441,6 +482,7 @@ public class BattleTestRunner : MonoBehaviour
         template.mainStatBaseValue = mainStatBaseValue;
         template.mainStatPerLevel = mainStatPerLevel;
         template.setId = setId;
+        template.description = description;
         return template;
     }
 

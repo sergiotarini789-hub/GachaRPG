@@ -19,25 +19,25 @@ public enum EquipResult
 
 /// <summary>
 /// The player's owned equipment: every <see cref="EquipmentInstance"/> the
-/// player owns plus the authoritative equip-state bookkeeping (which hero,
-/// if any, wears each item) - the equipment counterpart of
-/// <see cref="HeroRoster"/>. Equipment belongs to the player account, never
-/// to a hero: heroes are only lent items through slots, and removing or
-/// resetting a hero never destroys equipment.
+/// player owns plus the authoritative equip-state bookkeeping - the
+/// equipment counterpart of <see cref="HeroRoster"/>. Equipment belongs to
+/// the player account, never to a hero: heroes are only lent items through
+/// slots, and removing or resetting a hero never destroys equipment.
 ///
 /// Equip/unequip flows exclusively through <see cref="Equip"/> /
 /// <see cref="Unequip"/> - the single transactional path that enforces one
 /// item per slot, one owner per item, and correct handling of whatever item
 /// previously occupied the slot (it simply returns to the unequipped pool;
-/// inventory entries are never created or destroyed by equipping).
+/// inventory entries are never created or destroyed by equipping). The
+/// persisted equip-state truth is each item's
+/// <see cref="EquipmentInstance.equippedHeroId"/>; the heroes' slot maps
+/// are the runtime cache the stat pipeline reads, kept in sync only by
+/// this class.
 /// </summary>
 public class EquipmentInventory
 {
     /// <summary>All owned items, in acquisition order.</summary>
     private readonly List<EquipmentInstance> items = new List<EquipmentInstance>();
-
-    /// <summary>instanceId -> the HeroId of the hero wearing the item (the equip-state truth for queries).</summary>
-    private readonly Dictionary<string, string> equippedByHeroId = new Dictionary<string, string>();
 
     /// <summary>The roster, so equips can resolve and move items between heroes by hero id.</summary>
     private readonly HeroRoster roster;
@@ -57,12 +57,28 @@ public class EquipmentInventory
     /// <summary>How many items the player owns (equipped or not).</summary>
     public int Count => items.Count;
 
+    // ---------------------------------------------------------------------
+    // Ownership (adding / finding / removing)
+    // ---------------------------------------------------------------------
+
     /// <summary>
-    /// Creates a brand-new item from the template, assigns it the next
-    /// unique instance id, rolls its initial substats, and adds it to the
-    /// inventory. Returns null for a null template.
+    /// Creates a brand-new item from the definition at the definition's own
+    /// rarity, assigns it the next unique instance id, rolls its secondary
+    /// stats, and adds it to the inventory. Returns null for a null
+    /// definition.
     /// </summary>
     public EquipmentInstance CreateEquipment(EquipmentData template)
+    {
+        return CreateEquipment(template, template != null ? template.rarity : HeroRarity.Common);
+    }
+
+    /// <summary>
+    /// Creates a brand-new item from the definition at the given rarity
+    /// (the factory's path - rarity may differ from the definition's
+    /// typical one), assigns the next unique instance id, rolls secondary
+    /// stats, and adds it. Returns null for a null definition.
+    /// </summary>
+    public EquipmentInstance CreateEquipment(EquipmentData template, HeroRarity rarity)
     {
         if (template == null)
         {
@@ -70,14 +86,15 @@ public class EquipmentInventory
         }
 
         nextInstanceId++;
-        EquipmentInstance item = new EquipmentInstance(template, "eq-" + nextInstanceId);
+        EquipmentInstance item = new EquipmentInstance(template, "eq-" + nextInstanceId, rarity);
         items.Add(item);
         return item;
     }
 
     /// <summary>
     /// Adds an existing item instance (save/load restore). Rejects null
-    /// items and ids that would collide with an owned item.
+    /// items and ids that would collide with an owned item - instance ids
+    /// are unique by construction.
     /// </summary>
     public bool Add(EquipmentInstance item)
     {
@@ -109,25 +126,11 @@ public class EquipmentInventory
         return null;
     }
 
-    /// <summary>Whether some hero currently wears the item with the given instance id.</summary>
-    public bool IsEquipped(string instanceId)
-    {
-        return !string.IsNullOrEmpty(instanceId) && equippedByHeroId.ContainsKey(instanceId);
-    }
-
-    /// <summary>The HeroId of the hero wearing the item, or null when unequipped.</summary>
-    public string EquippedByHeroId(string instanceId)
-    {
-        return !string.IsNullOrEmpty(instanceId) && equippedByHeroId.TryGetValue(instanceId, out string heroId)
-            ? heroId
-            : null;
-    }
-
     /// <summary>
     /// Removes (destroys) an item from the inventory. Refuses - changing
     /// nothing - while the item is equipped or locked, so equipped or
-    /// locked gear can never be lost accidentally. Future sell/auto-sell
-    /// flows through here after unequipping.
+    /// locked gear can never be lost accidentally. Sell flows through here
+    /// (via <see cref="Sell"/>) after the equipped check.
     /// </summary>
     public bool RemoveEquipment(string instanceId)
     {
@@ -140,6 +143,48 @@ public class EquipmentInventory
         items.Remove(item);
         return true;
     }
+
+    /// <summary>
+    /// Sells the item: awards its sell value to the wallet and removes it
+    /// from the inventory. Refuses - changing nothing - while the item is
+    /// equipped (unequip first) or locked. Gold never goes negative (the
+    /// value is always positive by formula).
+    /// </summary>
+    public bool Sell(string instanceId, PlayerWallet wallet)
+    {
+        EquipmentInstance item = FindById(instanceId);
+        if (item == null || item.locked || IsEquipped(instanceId) || wallet == null)
+        {
+            return false;
+        }
+
+        int value = item.SellValue;
+        items.Remove(item);
+        wallet.AddGold(value);
+        return true;
+    }
+
+    // ---------------------------------------------------------------------
+    // Equip-state queries (read the item's equippedHeroId - the truth)
+    // ---------------------------------------------------------------------
+
+    /// <summary>Whether some hero currently wears the item with the given instance id.</summary>
+    public bool IsEquipped(string instanceId)
+    {
+        EquipmentInstance item = FindById(instanceId);
+        return item != null && !string.IsNullOrEmpty(item.equippedHeroId);
+    }
+
+    /// <summary>The HeroId of the hero wearing the item, or null when unequipped.</summary>
+    public string EquippedByHeroId(string instanceId)
+    {
+        EquipmentInstance item = FindById(instanceId);
+        return item != null && !string.IsNullOrEmpty(item.equippedHeroId) ? item.equippedHeroId : null;
+    }
+
+    // ---------------------------------------------------------------------
+    // Equip / unequip - the single transactional path
+    // ---------------------------------------------------------------------
 
     /// <summary>
     /// THE equip path: equips the item to the hero's matching slot.
@@ -171,17 +216,16 @@ public class EquipmentInventory
         }
 
         // One owner per item: free the item from any other hero first.
-        string currentOwner = EquippedByHeroId(item.instanceId);
-        if (currentOwner != null)
+        if (!string.IsNullOrEmpty(item.equippedHeroId))
         {
-            HeroInstance owner = roster != null ? roster.FindByHeroId(currentOwner) : null;
+            HeroInstance owner = roster != null ? roster.FindByHeroId(item.equippedHeroId) : null;
             if (owner != null)
             {
                 Unequip(owner, slot);
             }
             else
             {
-                equippedByHeroId.Remove(item.instanceId); // stale bookkeeping only
+                item.equippedHeroId = string.Empty; // stale bookkeeping only (hero no longer exists)
             }
         }
 
@@ -193,7 +237,7 @@ public class EquipmentInventory
             return EquipResult.SlotMismatch;
         }
 
-        equippedByHeroId[item.instanceId] = hero.data.HeroId;
+        item.equippedHeroId = hero.data.HeroId;
         return EquipResult.Equipped;
     }
 
@@ -216,14 +260,15 @@ public class EquipmentInventory
         }
 
         hero.DetachEquipment(slot);
-        equippedByHeroId.Remove(item.instanceId);
+        item.equippedHeroId = string.Empty;
         return true;
     }
 
     /// <summary>
     /// Restores an equipped relationship from a save (save/load only):
     /// attaches the exact item to the hero's slot and records the owner.
-    /// Trusted input - the save already validated it.
+    /// Trusted input - the save already validated it (defensively refuses
+    /// slot collisions from corrupt data).
     /// </summary>
     public void RestoreEquipped(HeroInstance hero, EquipmentSlot slot, EquipmentInstance item)
     {
@@ -232,9 +277,80 @@ public class EquipmentInventory
             return;
         }
 
+        if (hero.GetEquippedItem(slot) != null)
+        {
+            // Corrupt save: two items claim the same hero slot. Keep the
+            // first; this item returns to the pool.
+            item.equippedHeroId = string.Empty;
+            return;
+        }
+
         hero.AttachEquipment(slot, item);
-        equippedByHeroId[item.instanceId] = hero.data != null ? hero.data.HeroId : string.Empty;
+        item.equippedHeroId = hero.data != null ? hero.data.HeroId : string.Empty;
     }
+
+    // ---------------------------------------------------------------------
+    // Auto-equip (real "EQUIP BEST": role-scored, never rarity-blind)
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Equips the best available item per slot on the hero: every candidate
+    /// from the unequipped pool (or already on this hero) is scored with
+    /// the hero's role weights (<see cref="EquipmentStats.CalculateItemScore"/>)
+    /// and equipped only when it strictly beats the currently equipped
+    /// item's score. Never steals items from other heroes. Returns how many
+    /// items were equipped.
+    /// </summary>
+    public int EquipBest(HeroInstance hero)
+    {
+        if (hero == null || hero.data == null)
+        {
+            return 0;
+        }
+
+        string heroId = hero.data.HeroId;
+        HeroRole role = hero.data.role;
+        int equipped = 0;
+        for (int slot = 0; slot <= (int)EquipmentSlot.Accessory; slot++)
+        {
+            EquipmentInstance current = hero.GetEquippedItem((EquipmentSlot)slot);
+            float bestScore = EquipmentStats.CalculateItemScore(current, role);
+            EquipmentInstance best = current;
+
+            foreach (EquipmentInstance item in items)
+            {
+                if (item == null || item.slot != (EquipmentSlot)slot)
+                {
+                    continue;
+                }
+
+                // Only items this hero could take without stealing: in the
+                // unequipped pool, or already on this hero.
+                if (!string.IsNullOrEmpty(item.equippedHeroId) && item.equippedHeroId != heroId)
+                {
+                    continue;
+                }
+
+                float score = EquipmentStats.CalculateItemScore(item, role);
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    best = item;
+                }
+            }
+
+            if (best != null && !ReferenceEquals(best, current) && Equip(hero, best) == EquipResult.Equipped)
+            {
+                equipped++;
+            }
+        }
+
+        return equipped;
+    }
+
+    // ---------------------------------------------------------------------
+    // Save support & development reset
+    // ---------------------------------------------------------------------
 
     /// <summary>
     /// Ensures the instance-id counter is at least the given value and at
@@ -273,7 +389,6 @@ public class EquipmentInventory
         }
 
         items.Clear();
-        equippedByHeroId.Clear();
         nextInstanceId = 0;
     }
 }

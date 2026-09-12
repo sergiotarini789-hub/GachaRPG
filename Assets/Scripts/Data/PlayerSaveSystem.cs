@@ -81,11 +81,13 @@ public class SavedHero
 }
 
 /// <summary>
-/// One equipment item's persisted state. Templates are referenced by stable
-/// <see cref="EquipmentData.EquipmentId"/> so saves survive asset renames;
-/// every player-owned value (level, rolled substats, main stat, lock) is
-/// stored VERBATIM and never re-rolled or recomputed during loading.
-/// Enums persist as ints (stable enum values).
+/// <summary>
+/// One equipment item's persisted state. Definitions are referenced by
+/// stable <see cref="EquipmentData.EquipmentId"/> so saves survive asset
+/// renames; every player-owned value (level, rolled secondary stats,
+/// primary stat, base value, lock, equipped hero) is stored VERBATIM and
+/// never re-rolled or recomputed during loading. Enums persist as ints
+/// (stable enum values).
 /// </summary>
 [Serializable]
 public class SavedEquipment
@@ -93,7 +95,7 @@ public class SavedEquipment
     /// <summary>The item's unique instance id (e.g. "eq-7").</summary>
     public string instanceId;
 
-    /// <summary>The template's stable id (empty when the template was removed; the item still restores).</summary>
+    /// <summary>The definition's stable id (empty when the definition was removed; the item still restores).</summary>
     public string templateId;
 
     /// <summary>The item's slot (EquipmentSlot).</summary>
@@ -105,16 +107,19 @@ public class SavedEquipment
     /// <summary>The item's level.</summary>
     public int level = 1;
 
-    /// <summary>The main stat type (EquipmentStatType).</summary>
+    /// <summary>The primary stat type (EquipmentStatType).</summary>
     public int mainStatType;
 
-    /// <summary>The main stat's current value.</summary>
+    /// <summary>The primary stat's base value at level 1 (0 in pre-v4 saves; recovered on restore).</summary>
+    public int mainStatBaseValue;
+
+    /// <summary>The primary stat's current value.</summary>
     public int mainStatValue;
 
-    /// <summary>The substat types (EquipmentStatType values, parallel to <see cref="substatValues"/>).</summary>
+    /// <summary>The secondary stat types (EquipmentStatType values, parallel to <see cref="substatValues"/>).</summary>
     public int[] substatTypes;
 
-    /// <summary>The substat values (parallel to <see cref="substatTypes"/>).</summary>
+    /// <summary>The secondary stat values (parallel to <see cref="substatTypes"/>).</summary>
     public int[] substatValues;
 
     /// <summary>The item's set id (empty = no set).</summary>
@@ -122,6 +127,9 @@ public class SavedEquipment
 
     /// <summary>The item's lock flag (locked items are never accidentally sold or destroyed).</summary>
     public bool locked;
+
+    /// <summary>The HeroId of the hero wearing the item (empty = in the inventory pool).</summary>
+    public string equippedHeroId;
 
     /// <summary>Captures a live item's exact state.</summary>
     public static SavedEquipment From(EquipmentInstance item)
@@ -134,21 +142,23 @@ public class SavedEquipment
             rarity = (int)item.rarity,
             level = item.level,
             mainStatType = (int)item.mainStatType,
+            mainStatBaseValue = item.mainStatBaseValue,
             mainStatValue = item.mainStatValue,
             setId = item.setId ?? string.Empty,
             locked = item.locked,
+            equippedHeroId = item.equippedHeroId ?? string.Empty,
         };
 
         List<int> types = new List<int>();
         List<int> values = new List<int>();
-        if (item.substats != null)
+        if (item.secondaryStats != null)
         {
-            foreach (EquipmentSubstat substat in item.substats)
+            foreach (EquipmentSecondaryStat secondary in item.secondaryStats)
             {
-                if (substat != null)
+                if (secondary != null)
                 {
-                    types.Add((int)substat.statType);
-                    values.Add(substat.value);
+                    types.Add((int)secondary.statType);
+                    values.Add(secondary.value);
                 }
             }
         }
@@ -160,17 +170,17 @@ public class SavedEquipment
 
     /// <summary>
     /// Rebuilds the exact item (no re-rolls, no recomputation): every value
-    /// comes from the save. The template may be null (removed asset) - the
+    /// comes from the save. The definition may be null (removed asset) - the
     /// item stays fully usable except for upgrading.
     /// </summary>
     public EquipmentInstance Restore(EquipmentData template)
     {
-        List<EquipmentSubstat> substats = new List<EquipmentSubstat>();
+        List<EquipmentSecondaryStat> secondaryStats = new List<EquipmentSecondaryStat>();
         if (substatTypes != null && substatValues != null)
         {
             for (int i = 0; i < substatTypes.Length && i < substatValues.Length; i++)
             {
-                substats.Add(new EquipmentSubstat { statType = (EquipmentStatType)substatTypes[i], value = substatValues[i] });
+                secondaryStats.Add(new EquipmentSecondaryStat { statType = (EquipmentStatType)substatTypes[i], value = substatValues[i] });
             }
         }
 
@@ -180,18 +190,21 @@ public class SavedEquipment
             (HeroRarity)rarity,
             (EquipmentSlot)slot,
             (EquipmentStatType)mainStatType,
+            mainStatBaseValue,
             mainStatValue,
-            substats,
+            secondaryStats,
             setId,
             locked,
+            equippedHeroId,
             level);
     }
 }
 
 /// <summary>
-/// One hero's equipped-item relationships at save time: the hero's stable
-/// id plus the equipped instance id per slot (6 entries, "" = empty slot;
-/// index = <see cref="EquipmentSlot"/> value).
+/// Legacy v3 equip-state record: the hero's equipped instance id per slot.
+/// Superseded in v4 by each item's own
+/// <see cref="SavedEquipment.equippedHeroId"/>; kept ONLY so v3 saves can
+/// be migrated forward (never written for new saves).
 /// </summary>
 [Serializable]
 public class SavedEquipped
@@ -205,9 +218,10 @@ public class SavedEquipped
 
 /// <summary>
 /// The whole persisted player profile: the save-format version, the wallet,
-/// every owned hero, the equipment inventory, and the equip-state
-/// relationships. Versioned so format changes migrate old files instead of
-/// resetting them (see <see cref="PlayerSaveSystem.Load"/>).
+/// every owned hero, and the equipment inventory (each item carries its own
+/// equipped hero id - the equip-state truth). Versioned so format changes
+/// migrate old files instead of resetting them (see
+/// <see cref="PlayerSaveSystem.Load"/>).
 /// </summary>
 [Serializable]
 public class SavedProfile
@@ -233,7 +247,11 @@ public class SavedProfile
     /// <summary>The equipment inventory at save time (empty/null on pre-equipment saves).</summary>
     public SavedEquipment[] equipment;
 
-    /// <summary>The equipped hero/slot relationships at save time (parallel to the roster).</summary>
+    /// <summary>
+    /// LEGACY v3 equip-state records - read only for migration. Since v4
+    /// each item's <see cref="SavedEquipment.equippedHeroId"/> is the
+    /// equip-state truth; new saves write an empty array here.
+    /// </summary>
     public SavedEquipped[] equipped;
 
     /// <summary>The inventory's instance-id counter, so restored and new ids never collide.</summary>
@@ -289,26 +307,6 @@ public static class PlayerSaveSystem
                 }
 
                 profile.heroes = heroes.ToArray();
-
-                // The equipped hero/slot relationships (per hero, per slot).
-                List<SavedEquipped> equipped = new List<SavedEquipped>();
-                foreach (HeroInstance hero in roster.Heroes)
-                {
-                    if (hero == null || hero.data == null || hero.EquippedItemCount == 0)
-                    {
-                        continue;
-                    }
-
-                    string[] slotIds = new string[6];
-                    for (int slot = 0; slot < 6; slot++)
-                    {
-                        slotIds[slot] = hero.GetEquippedItemId((EquipmentSlot)slot);
-                    }
-
-                    equipped.Add(new SavedEquipped { heroId = hero.data.HeroId, slotItemIds = slotIds });
-                }
-
-                profile.equipped = equipped.ToArray();
             }
 
             if (equipment != null)
@@ -394,6 +392,12 @@ public static class PlayerSaveSystem
     /// Version 2 to 3 - the equipment inventory was added. Pre-equipment
     /// saves have no equipment data, which restores as an empty inventory
     /// (see <see cref="RestoreEquipment"/>); nothing else changes.
+    ///
+    /// Version 3 to 4 - equip state moved from separate hero records onto
+    /// each item's own equippedHeroId (the records are merged into the
+    /// items), and per-rarity level caps arrived: over-level items clamp to
+    /// their rarity's new cap with the primary stat recomputed during
+    /// restore. Nothing else changes.
     /// </summary>
     private static void MigrateToCurrentVersion(SavedProfile profile)
     {
@@ -428,6 +432,46 @@ public static class PlayerSaveSystem
             // an empty inventory. Logged for transparency, not warned: an
             // old save loading with no equipment is expected, safe behavior.
             Debug.Log("PlayerSaveSystem: migrated save v2 to v3 (no equipment data; starting with an empty equipment inventory).");
+        }
+
+        if (profile.version < 4)
+        {
+            // v3 kept equip-state as separate hero records; v4 stores the
+            // owner on each item. Move the records onto the items (items
+            // without a record stay in the pool); level caps also changed
+            // with v4's per-rarity rules - the item restore path clamps and
+            // recomputes safely.
+            if (profile.equipped != null && profile.equipment != null)
+            {
+                foreach (SavedEquipped equipped in profile.equipped)
+                {
+                    if (equipped == null || string.IsNullOrEmpty(equipped.heroId) || equipped.slotItemIds == null)
+                    {
+                        continue;
+                    }
+
+                    for (int slot = 0; slot < equipped.slotItemIds.Length && slot <= (int)EquipmentSlot.Accessory; slot++)
+                    {
+                        string itemId = equipped.slotItemIds[slot];
+                        if (string.IsNullOrEmpty(itemId))
+                        {
+                            continue;
+                        }
+
+                        foreach (SavedEquipment saved in profile.equipment)
+                        {
+                            if (saved != null && saved.instanceId == itemId)
+                            {
+                                saved.equippedHeroId = equipped.heroId;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            profile.equipped = null;
+            Debug.Log("PlayerSaveSystem: migrated save v3 to v4 (equip state moved onto equipment items; per-rarity level caps applied on restore).");
         }
 
         profile.version = HeroProgression.CurrentSaveVersion;
@@ -482,14 +526,15 @@ public static class PlayerSaveSystem
 
     /// <summary>
     /// Rebuilds the equipment inventory from a save: every saved item is
-    /// restored VERBATIM (substats and main stat are never re-rolled or
-    /// recomputed), templates are resolved by stable id against the catalog,
-    /// and the equipped hero/slot relationships are re-attached to the
-    /// roster's heroes. Saves without equipment data (pre-equipment formats)
-    /// return an empty inventory. Unresolvable templates keep the item
-    /// (usable, but it cannot upgrade); unresolvable heroes or items leave
-    /// the affected equipment safely in the inventory pool - never
-    /// destroyed, never a crash.
+    /// restored VERBATIM (secondary stats and the primary stat are never
+    /// re-rolled), definitions are resolved by stable id against the
+    /// catalog, and each item's equipped hero is re-attached to the roster
+    /// (the item's own equippedHeroId is the truth; level clamps to the
+    /// rarity's current cap, recomputing the primary stat when needed).
+    /// Saves without equipment data (pre-equipment formats) return an
+    /// empty inventory. Unresolvable definitions keep the item (usable,
+    /// but it cannot upgrade); an unresolvable hero leaves the item safely
+    /// in the inventory pool - never destroyed, never a crash.
     /// </summary>
     public static EquipmentInventory RestoreEquipment(SavedProfile profile, HeroRoster roster, List<EquipmentData> catalog)
     {
@@ -520,47 +565,28 @@ public static class PlayerSaveSystem
         inventory.SetNextInstanceId(profile.nextEquipmentId);
 
         // Re-attach the equipped relationships AFTER the roster is fully
-        // restored (and consolidated), so only surviving heroes receive items.
-        if (profile.equipped != null && roster != null)
+        // restored (and consolidated), so only surviving heroes receive
+        // items. Since v4 the truth is each item's equippedHeroId (v3
+        // records were already merged into the items by migration).
+        if (roster != null)
         {
-            foreach (SavedEquipped equipped in profile.equipped)
+            foreach (EquipmentInstance item in inventory.Items)
             {
-                if (equipped == null || string.IsNullOrEmpty(equipped.heroId))
+                if (item == null || string.IsNullOrEmpty(item.equippedHeroId))
                 {
                     continue;
                 }
 
-                HeroInstance hero = roster.FindByHeroId(equipped.heroId);
+                HeroInstance hero = roster.FindByHeroId(item.equippedHeroId);
                 if (hero == null)
                 {
-                    Debug.LogWarning("PlayerSaveSystem: equipped hero '" + equipped.heroId +
+                    Debug.LogWarning("PlayerSaveSystem: equipped hero '" + item.equippedHeroId +
                         "' not found; that hero's equipped items stay safely in the inventory pool.");
+                    item.equippedHeroId = string.Empty;
                     continue;
                 }
 
-                if (equipped.slotItemIds == null)
-                {
-                    continue;
-                }
-
-                for (int slot = 0; slot < equipped.slotItemIds.Length && slot <= (int)EquipmentSlot.Accessory; slot++)
-                {
-                    string itemId = equipped.slotItemIds[slot];
-                    if (string.IsNullOrEmpty(itemId))
-                    {
-                        continue;
-                    }
-
-                    EquipmentInstance item = inventory.FindById(itemId);
-                    if (item == null)
-                    {
-                        Debug.LogWarning("PlayerSaveSystem: equipped item '" + itemId +
-                            "' not found in the inventory; slot left empty.");
-                        continue;
-                    }
-
-                    inventory.RestoreEquipped(hero, (EquipmentSlot)slot, item);
-                }
+                inventory.RestoreEquipped(hero, item.slot, item);
             }
         }
 

@@ -22,6 +22,38 @@ public static class CombatManager
     }
 
     /// <summary>
+    /// The base critical damage multiplier every crit uses before the
+    /// attacker's equipment-granted CRIT_DAMAGE bonus (in percent).
+    /// </summary>
+    public const float BaseCritMultiplier = 1.5f;
+
+    /// <summary>
+    /// Applies the attacker's critical strike to a damage roll: with the
+    /// attacker's crit chance (equipment-granted; heroes have no innate
+    /// crit) the hit is multiplied by 1.5 + the attacker's crit damage
+    /// bonus, never below 1. A hero with 0 crit rate never rolls, so
+    /// unequipped battles play out exactly as before this system existed.
+    /// </summary>
+    /// <param name="attacker">The unit dealing the damage.</param>
+    /// <param name="damage">The pre-crit damage roll.</param>
+    /// <returns>The final damage (crit-applied when lucky), minimum 1.</returns>
+    public static int ApplyCrit(HeroInstance attacker, int damage)
+    {
+        if (attacker == null || attacker.critRate <= 0)
+        {
+            return damage;
+        }
+
+        if (UnityEngine.Random.Range(0, 100) >= attacker.critRate)
+        {
+            return damage;
+        }
+
+        float multiplier = BaseCritMultiplier + attacker.critDamage * 0.01f;
+        return Math.Max(1, Mathf.RoundToInt(damage * multiplier));
+    }
+
+    /// <summary>
     /// Resolves one attack: calculates damage and applies it to the defender,
     /// logging the result and the defender's remaining HP.
     /// </summary>
@@ -29,7 +61,7 @@ public static class CombatManager
     /// <param name="defender">The unit receiving the hit.</param>
     public static void PerformAttack(HeroInstance attacker, HeroInstance defender)
     {
-        int damage = CalculateDamage(attacker, defender);
+        int damage = ApplyCrit(attacker, CalculateDamage(attacker, defender));
         defender.TakeDamage(damage);
 
         Debug.Log(
@@ -38,15 +70,16 @@ public static class CombatManager
     }
 
     /// <summary>
-    /// Resolves one skill use, scaling with the attacker's currentAttack and
-    /// the skill's effective multiplier on the attacking hero (skill
-    /// progression raises it - see HeroInstance.GetSkillMultiplier; at
-    /// skill level 1 it equals the skill's authored damageMultiplier) and
-    /// applying the skill's effect (SkillType) to the resolved target:
-    /// Damage skills hit the target for (attack x multiplier - defense,
-    /// minimum 1); Heal skills restore the target's health (capped at the
-    /// target's current maximum health - pass the attacker itself for
-    /// self-heals);
+/// Resolves one skill use, scaling with the attacker's currentAttack and
+/// the skill's effective multiplier on the attacking hero (skill
+/// progression raises it - see HeroInstance.GetSkillMultiplier; at
+/// skill level 1 it equals the skill's authored damageMultiplier) and
+/// applying the skill's effect (SkillType) to the resolved target:
+/// Damage skills hit the target for (attack x multiplier - defense,
+/// minimum 1, then the attacker's crit chance applies - see
+/// <see cref="ApplyCrit"/>); Heal skills restore the target's health
+/// (capped at the target's current maximum health - pass the attacker
+/// itself for self-heals);
     /// Buff is a placeholder announcement. Puts the skill on cooldown at the
     /// end; a skill with no valid target fails safely instead (no effect, no
     /// cooldown). Target selection (enemy/self/ally) is the caller's job -
@@ -69,7 +102,7 @@ public static class CombatManager
 
             string targetName = target.displayName;
             int damage = Mathf.RoundToInt(attacker.currentAttack * attacker.GetSkillMultiplier(skill)) - target.currentDefense;
-            damage = Math.Max(1, damage);
+            damage = ApplyCrit(attacker, Math.Max(1, damage));
             target.TakeDamage(damage);
 
             Debug.Log(

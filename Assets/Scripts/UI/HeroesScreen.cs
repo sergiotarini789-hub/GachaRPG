@@ -38,9 +38,12 @@ using UnityEngine.UI;
 /// - a clearly marked DEBUG tool column (development only): add XP, add
 ///   gold, +1 constellation (the exact path a duplicate summon takes),
 ///   add Awakening Materials / Hero Tokens, reset the selected hero's
-///   progression, and equipment tools (add an item, auto-equip the best
-///   items, upgrade gear, unequip all, wipe the inventory) - the minimum
-///   interface needed to exercise the equipment system.
+///   progression, and equipment tools (generate an item, role-scored
+///   auto-equip, upgrade gear, unequip all, wipe the inventory) - all
+///   routed through the same real equipment systems;
+/// - a player-facing EQUIPMENT button in the top bar that opens the
+///   Equipment inventory screen (see <see cref="EquipmentScreen"/>) with
+///   the selected hero as the initial equip target.
 ///
 /// This is a pure view layer: every value is read from the actual
 /// <see cref="HeroInstance"/> (progression and current stats) and its
@@ -463,6 +466,19 @@ public class HeroesScreen : MonoBehaviour
     }
 
     /// <summary>
+    /// Opens the Equipment inventory screen (the player-facing equipment
+    /// management UI) with the currently selected hero as the initial equip
+    /// target - a real navigation action, not a debug tool.
+    /// </summary>
+    private void OpenEquipmentScreen()
+    {
+        if (runner != null)
+        {
+            runner.OpenEquipmentScreen(selectedHero);
+        }
+    }
+
+    /// <summary>
     /// Selects the given hero (or null for the empty state) and refreshes
     /// the details view and the card highlights from the actual
     /// <see cref="HeroInstance"/> state.
@@ -630,8 +646,8 @@ public class HeroesScreen : MonoBehaviour
             string set = string.IsNullOrEmpty(item.setId) ? string.Empty : "  [" + SetDisplayName(item.setId) + "]";
             string locked = item.locked ? "  [LOCKED]" : string.Empty;
             detailSlotTexts[slot].text = SlotLabel((EquipmentSlot)slot) + "   " + itemName
-                + "  (" + RarityStyleFor(item.rarity).Label + ")  Lv " + item.level
-                + "   " + EquipmentStatLabel(item.mainStatType) + " +" + item.mainStatValue
+                + "  (" + RarityStyleFor(item.rarity).Label + ")  Lv " + item.level + "/" + item.MaxLevel
+                + "   " + EquipmentStatLabel(item.mainStatType) + " " + EquipmentStatValueText(item.mainStatType, item.mainStatValue)
                 + set + locked;
             detailSlotTexts[slot].color = Color.white;
 
@@ -668,8 +684,18 @@ public class HeroesScreen : MonoBehaviour
             case EquipmentStatType.ATK: return "ATK";
             case EquipmentStatType.DEF: return "DEF";
             case EquipmentStatType.SPD: return "SPD";
+            case EquipmentStatType.CRIT_RATE: return "CRIT RATE";
+            case EquipmentStatType.CRIT_DAMAGE: return "CRIT DMG";
+            case EquipmentStatType.ACCURACY: return "ACC";
+            case EquipmentStatType.RESISTANCE: return "RES";
             default: return statType.ToString().ToUpperInvariant();
         }
+    }
+
+    /// <summary>Formats one stat value: "+12" for flats, "+2%" for percentage stats.</summary>
+    private static string EquipmentStatValueText(EquipmentStatType statType, int value)
+    {
+        return "+" + value + (EquipmentProgression.IsPercentStat(statType) ? "%" : string.Empty);
     }
 
     /// <summary>The set's display name, or the raw id for unknown sets (data-driven, never hardcoded).</summary>
@@ -679,18 +705,18 @@ public class HeroesScreen : MonoBehaviour
         return set != null && !string.IsNullOrEmpty(set.SetName) ? set.SetName : setId;
     }
 
-    /// <summary>One dimmed line with the item's rolled substats, e.g. "ATK +9 / DEF +5".</summary>
+    /// <summary>One dimmed line with the item's rolled secondary stats, e.g. "ATK +9 / CRIT RATE +2%".</summary>
     private static string SubstatSummary(EquipmentInstance item)
     {
-        if (item == null || item.substats == null || item.substats.Count == 0)
+        if (item == null || item.secondaryStats == null || item.secondaryStats.Count == 0)
         {
-            return "no substats";
+            return "no secondary stats";
         }
 
         System.Text.StringBuilder text = new System.Text.StringBuilder();
-        foreach (EquipmentSubstat substat in item.substats)
+        foreach (EquipmentSecondaryStat secondary in item.secondaryStats)
         {
-            if (substat == null)
+            if (secondary == null)
             {
                 continue;
             }
@@ -700,10 +726,11 @@ public class HeroesScreen : MonoBehaviour
                 text.Append(" / ");
             }
 
-            text.Append(EquipmentStatLabel(substat.statType)).Append(" +").Append(substat.value);
+            text.Append(EquipmentStatLabel(secondary.statType)).Append(" ")
+                .Append(EquipmentStatValueText(secondary.statType, secondary.value));
         }
 
-        return text.Length > 0 ? text.ToString() : "no substats";
+        return text.Length > 0 ? text.ToString() : "no secondary stats";
     }
 
     /// <summary>
@@ -1049,9 +1076,10 @@ public class HeroesScreen : MonoBehaviour
     // ----- DEBUG equipment tools (development only) -----
 
     /// <summary>
-    /// DEBUG: creates one new item in the inventory, cycling through the
-    /// equipment catalog template by template (development tool; the real
-    /// acquisition flow will be drops/summons/crafting later).
+    /// DEBUG: generates one new item into the inventory through the real
+    /// EquipmentFactory acquisition path, cycling through the catalog's
+    /// definitions (development tool; the real acquisition flow will be
+    /// drops/summons/crafting later).
     /// </summary>
     private void OnDebugAddEquipment()
     {
@@ -1062,26 +1090,31 @@ public class HeroesScreen : MonoBehaviour
             return;
         }
 
-        EquipmentData template = catalog[debugEquipmentTemplateIndex % catalog.Count];
+        // Cycle the definitions so every slot/rarity combination is
+        // reachable; the factory picks the definition for the requested
+        // slot + rarity (exact-rarity match preferred).
+        EquipmentData definition = catalog[debugEquipmentTemplateIndex % catalog.Count];
         debugEquipmentTemplateIndex++;
 
-        EquipmentInstance item = inventory.CreateEquipment(template);
+        EquipmentInstance item = EquipmentFactory.GenerateEquipment(
+            inventory, definition.slot, definition.rarity, catalog);
         if (item == null)
         {
-            SetStatus("DEBUG: could not create equipment.");
+            SetStatus("DEBUG: could not generate equipment.");
             return;
         }
 
-        SetStatus("DEBUG: added " + (template != null ? template.equipmentName : "item")
-            + " (" + RarityStyleFor(item.rarity).Label + " " + SlotLabel(item.slot) + ", " + item.instanceId + ").");
+        SetStatus("DEBUG: added " + item.instanceId
+            + " (" + RarityStyleFor(item.rarity).Label + " " + SlotLabel(item.slot) + ").");
         AfterProgressionAction();
     }
 
     /// <summary>
     /// DEBUG: equips the best available item per slot on the selected hero
-    /// (highest main stat, ties by level). Only takes items from the
-    /// unequipped pool - never steals from other heroes (development tool;
-    /// real equipment management UI comes later).
+    /// through the real role-scored auto-equip (never steals from other
+    /// heroes; only strictly better items replace what is worn) -
+    /// development tool; the player-facing equipment management lives on
+    /// the Equipment screen.
     /// </summary>
     private void OnDebugEquipBest()
     {
@@ -1092,43 +1125,10 @@ public class HeroesScreen : MonoBehaviour
             return;
         }
 
-        string heroId = hero.data != null ? hero.data.HeroId : string.Empty;
-        int equipped = 0;
-        for (int slot = 0; slot < 6; slot++)
-        {
-            EquipmentInstance best = null;
-            foreach (EquipmentInstance item in inventory.Items)
-            {
-                if (item == null || item.slot != (EquipmentSlot)slot)
-                {
-                    continue;
-                }
-
-                // Only items this hero could take without stealing: in the
-                // unequipped pool, or already on this hero.
-                string owner = inventory.EquippedByHeroId(item.instanceId);
-                if (owner != null && owner != heroId)
-                {
-                    continue;
-                }
-
-                if (best == null
-                    || item.mainStatValue > best.mainStatValue
-                    || (item.mainStatValue == best.mainStatValue && item.level > best.level))
-                {
-                    best = item;
-                }
-            }
-
-            if (best != null && inventory.Equip(hero, best) == EquipResult.Equipped)
-            {
-                equipped++;
-            }
-        }
-
+        int equipped = inventory.EquipBest(hero);
         SetStatus(equipped > 0
             ? "DEBUG: equipped " + equipped + " best item(s) on " + hero.displayName + "."
-            : "DEBUG: no unequipped items available for " + hero.displayName + ".");
+            : "DEBUG: " + hero.displayName + " already wears the best available gear.");
         AfterProgressionAction();
     }
 
@@ -1163,7 +1163,8 @@ public class HeroesScreen : MonoBehaviour
             }
 
             SetStatus("DEBUG: " + name + " upgraded to Lv " + item.level
-                + " (" + EquipmentStatLabel(item.mainStatType) + " +" + item.mainStatValue + ").");
+                + " (" + EquipmentStatLabel(item.mainStatType) + " "
+                + EquipmentStatValueText(item.mainStatType, item.mainStatValue) + ").");
             AfterProgressionAction();
             return;
         }
@@ -1272,6 +1273,31 @@ public class HeroesScreen : MonoBehaviour
         Button backButton = backRect.gameObject.AddComponent<Button>();
         backButton.targetGraphic = backBack;
         backButton.onClick.AddListener(GoBack);
+
+        // ---- EQUIPMENT button (left, next to BACK): opens the Equipment
+        // inventory screen with the currently selected hero as the initial
+        // equip target. Player-facing equipment management lives there;
+        // the tools below the details panel stay debug-only. ----
+        RectTransform equipRect = CreateRect(bar, "EquipmentButton");
+        equipRect.anchorMin = TopLeft;
+        equipRect.anchorMax = TopLeft;
+        equipRect.pivot = new Vector2(0f, 0.5f);
+        equipRect.anchoredPosition = new Vector2(198f, -TopBarHeight * 0.5f);
+        equipRect.sizeDelta = new Vector2(200f, 64f);
+
+        Image equipBack = CreateSlicedImage(equipRect, "Back", BadgeColor, panelSprite,
+            TopLeft, TopLeft, Vector2.zero, equipRect.sizeDelta);
+        equipBack.raycastTarget = true;
+
+        Text equipLabel = CreateText(equipRect, "Label", "EQUIPMENT",
+            BackButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        Stretch(equipLabel.rectTransform);
+        equipLabel.color = GoldAccent;
+
+        Button equipButton = equipRect.gameObject.AddComponent<Button>();
+        equipButton.targetGraphic = equipBack;
+        equipButton.onClick.AddListener(OpenEquipmentScreen);
 
         // ---- Title (center) ----
         CreateText(bar, "Title", "HEROES",
