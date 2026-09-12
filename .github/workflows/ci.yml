@@ -19,10 +19,9 @@
 #     valid license.
 #   - git on PATH (already required by any actions runner).
 #
-# The actions are pinned to the Node 20 generation (checkout@v4 /
-# upload-artifact@v4) so they also run on older self-hosted runner
-# versions. Once the runner is version 2.327.1 or newer, they can be
-# bumped to checkout@v5 / upload-artifact@v6.
+# The actions are pinned to the Node 24 generation (checkout@v5 /
+# upload-artifact@v6); the runner must be version 2.327.1 or newer
+# (any runner updated since August 2025 qualifies).
 
 name: Unity CI/CD (self-hosted Windows)
 
@@ -49,7 +48,7 @@ jobs:
       # 1) Checkout the repository.
       # ----------------------------------------------------------------
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         # Tip: adding  clean: false  keeps the Unity Library folder
         # between runs, which makes imports much faster.
 
@@ -189,8 +188,14 @@ jobs:
             )
           }
 
-          & $unity @unityArgs
-          $unityExit = $LASTEXITCODE
+          # Start-Process -Wait instead of the call operator: Unity.exe can
+          # return control to PowerShell without setting $LASTEXITCODE, so
+          # the step must wait for the editor process explicitly.
+          $quotedArgs = @($unityArgs | ForEach-Object {
+            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+          })
+          $proc = Start-Process -FilePath $unity -ArgumentList $quotedArgs -Wait -PassThru -NoNewWindow
+          $unityExit = $proc.ExitCode
           Write-Output "Unity validation/test run finished with exit code $unityExit"
 
           $testRunFailed = $false
@@ -257,8 +262,12 @@ jobs:
             '-buildWindows64Player', "$exePath",
             '-logFile', "$buildLog"
           )
-          & $unity @unityArgs
-          $unityExit = $LASTEXITCODE
+          # Same as the validation step: wait for the editor explicitly.
+          $quotedArgs = @($unityArgs | ForEach-Object {
+            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
+          })
+          $proc = Start-Process -FilePath $unity -ArgumentList $quotedArgs -Wait -PassThru -NoNewWindow
+          $unityExit = $proc.ExitCode
           Write-Output "Unity build run finished with exit code $unityExit"
 
           $exeExists = Test-Path $exePath -PathType Leaf
@@ -284,7 +293,7 @@ jobs:
       # ----------------------------------------------------------------
       - name: Upload Windows build artifact
         if: success()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ env.PRODUCT_NAME }}-windows-x64-build
           path: Build/Windows/
@@ -313,7 +322,7 @@ jobs:
       # ----------------------------------------------------------------
       - name: Upload CI logs (failure diagnostics)
         if: ${{ !success() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ci-logs-run-${{ github.run_number }}
           path: |
@@ -381,9 +390,27 @@ jobs:
                 Write-Output "  ERROR: $m"
                 $script:allErrors += $m
               }
+              # Surface the first errors as annotations in the GitHub UI.
+              $i = 0
+              foreach ($m in $matched) {
+                if ($i -ge 8) { break }
+                $a = ([string]$m -replace '\s+', ' ').Trim()
+                if ($a.Length -gt 230) { $a = $a.Substring(0, 230) + '...' }
+                $a = $a.Replace('%', '%25')
+                Write-Output "::error::$a"
+                $i++
+              }
             } else {
-              Write-Output '  (no error-pattern lines were found - the last 40 log lines follow for context)'
-              foreach ($l in @($lines | Select-Object -Last 40)) { Write-Output "  $l" }
+              Write-Output '  (no error-pattern lines were found - the first 15 and last 40 log lines follow for context)'
+              foreach ($l in @($lines | Select-Object -First 15)) { Write-Output "  HEAD: $l" }
+              foreach ($l in @($lines | Select-Object -Last 40)) { Write-Output "  TAIL: $l" }
+              # One annotation with the log head, so the cause of startup
+              # failures (license, arguments, version) is visible directly.
+              $head = (@($lines | Where-Object { $_ -and $_.Trim() } | Select-Object -First 3) -join ' | ')
+              $head = ([string]$head -replace '\s+', ' ').Trim()
+              if ($head.Length -gt 230) { $head = $head.Substring(0, 230) + '...' }
+              $head = $head.Replace('%', '%25')
+              Write-Output "::error::No error-pattern lines in $(Split-Path -Leaf $logPath); log head: $head"
             }
             Write-Output ''
           }
