@@ -323,6 +323,42 @@ public class HeroesScreen : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Rebuilds the hero cards every time the screen is (re)opened, so
+    /// heroes added to the roster while it was closed - a fresh summon, for
+    /// example - appear immediately. The very first OnEnable runs during
+    /// <see cref="Create"/> before the runner is assigned; Initialize
+    /// performs that initial build instead.
+    /// </summary>
+    private void OnEnable()
+    {
+        if (runner == null)
+        {
+            return;
+        }
+
+        RebuildHeroCards();
+        SelectHero(FindHeroToSelect());
+    }
+
+    /// <summary>
+    /// The hero to select after a rebuild: the previously selected instance
+    /// when it is still owned (matched by reference, so duplicate heroes of
+    /// the same template stay distinct), otherwise the first card.
+    /// </summary>
+    private HeroInstance FindHeroToSelect()
+    {
+        foreach (HeroInstance hero in cardHeroes)
+        {
+            if (ReferenceEquals(hero, selectedHero))
+            {
+                return hero;
+            }
+        }
+
+        return cardHeroes.Count > 0 ? cardHeroes[0] : null;
+    }
+
     // ---------------------------------------------------------------------
     // Navigation and selection.
     // ---------------------------------------------------------------------

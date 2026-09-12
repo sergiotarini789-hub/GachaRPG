@@ -23,8 +23,9 @@ using UnityEngine.UI;
 ///   existing battle;
 /// - a bottom navigation bar: Home / Heroes / Summon / Battle / Shop. Home
 ///   returns to the squad view; Heroes opens the runtime Heroes collection
-///   screen (see HeroesScreen) through the runner; Summon and Shop show a
-///   "Coming Soon" placeholder; Battle starts the battle;
+///   screen (see HeroesScreen) and Summon opens the runtime Summon screen
+///   (see SummonScreen), both through the runner; Shop shows a "Coming
+///   Soon" placeholder; Battle starts the battle;
 /// - every card is fully data-driven from the assigned <see cref="HeroData"/>
 ///   assets - no hero names, stats, or rarity are hardcoded here.
 ///
@@ -344,6 +345,19 @@ public class MainMenu : MonoBehaviour
         }
     }
 
+    /// <summary>
+    /// Opens the Summon screen through the runner: the runner hides this
+    /// menu and shows its SummonScreen; the screen's BACK button returns
+    /// here. Navigation only.
+    /// </summary>
+    private void OpenSummon()
+    {
+        if (runner != null)
+        {
+            runner.OpenSummonScreen();
+        }
+    }
+
     /// <summary>Switches the center view and the navigation highlight to the given tab.</summary>
     private void ShowTab(int tab)
     {
@@ -644,8 +658,9 @@ public class MainMenu : MonoBehaviour
     /// <summary>
     /// Builds the bottom navigation bar: Home / Heroes / Summon / Battle /
     /// Shop. Home returns to the squad view; Heroes opens the Heroes
-    /// collection screen; Summon and Shop show the Coming Soon placeholder;
-    /// Battle starts the battle. Tabs are highlighted when active.
+    /// collection screen; Summon opens the Summon screen; Shop shows the
+    /// Coming Soon placeholder; Battle starts the battle. Tabs are
+    /// highlighted when active.
     /// </summary>
     private void BuildBottomNav(RectTransform root)
     {
@@ -699,7 +714,7 @@ public class MainMenu : MonoBehaviour
                 button.onClick.AddListener(OpenHeroes);
                 break;
             case 2:
-                button.onClick.AddListener(() => ShowComingSoon(2, "Summon"));
+                button.onClick.AddListener(OpenSummon);
                 break;
             case 3:
                 button.onClick.AddListener(StartBattle);

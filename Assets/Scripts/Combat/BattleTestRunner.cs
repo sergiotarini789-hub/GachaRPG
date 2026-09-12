@@ -102,6 +102,17 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>The runtime Heroes collection screen, created on first open and reused afterwards.</summary>
     private HeroesScreen heroesScreen;
 
+    /// <summary>
+    /// The summon system: rolls rarities on its weighted table, creates new
+    /// HeroInstances from the catalog templates, and adds them to the
+    /// roster. Built once in Start; the Summon screen only requests
+    /// summons from it.
+    /// </summary>
+    private SummonService summonService;
+
+    /// <summary>The runtime Summon screen, created on first open and reused afterwards.</summary>
+    private SummonScreen summonScreen;
+
     /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
     private bool battleRunning;
 
@@ -196,6 +207,10 @@ public class BattleTestRunner : MonoBehaviour
         // Heroes collection screen reads it from the main menu.
         BuildInitialRoster();
 
+        // The summon system draws new owned heroes from the same templates
+        // and adds them to the roster.
+        summonService = new SummonService(BuildSummonCatalog(), roster);
+
         if (startWithMainMenu)
         {
             // The runtime main menu is the entry point; the battle starts
@@ -252,6 +267,11 @@ public class BattleTestRunner : MonoBehaviour
 
         heroesScreen.gameObject.SetActive(true);
 
+        if (summonScreen != null)
+        {
+            summonScreen.gameObject.SetActive(false);
+        }
+
         if (menu != null)
         {
             menu.gameObject.SetActive(false);
@@ -269,6 +289,75 @@ public class BattleTestRunner : MonoBehaviour
         if (menu != null)
         {
             menu.gameObject.SetActive(true);
+        }
+    }
+
+    /// <summary>The summon system; the Summon screen requests summons from it. No gacha logic lives in the UI.</summary>
+    public SummonService SummonService => summonService;
+
+    /// <summary>
+    /// Opens the Summon screen from the main menu's SUMMON tab: hides the
+    /// menu (and the Heroes screen, should one be open) and shows the
+    /// runtime summon screen (built once on first open, re-activated
+    /// afterwards). Pure navigation - no battle state is touched.
+    /// </summary>
+    public void OpenSummonScreen()
+    {
+        if (summonScreen == null)
+        {
+            summonScreen = SummonScreen.Create(this);
+        }
+
+        summonScreen.gameObject.SetActive(true);
+
+        if (heroesScreen != null)
+        {
+            heroesScreen.gameObject.SetActive(false);
+        }
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(false);
+        }
+    }
+
+    /// <summary>Closes the Summon screen and returns to the main menu.</summary>
+    public void CloseSummonScreen()
+    {
+        if (summonScreen != null)
+        {
+            summonScreen.gameObject.SetActive(false);
+        }
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(true);
+        }
+    }
+
+    /// <summary>
+    /// Collects the distinct HeroData templates summons can produce: the
+    /// prototype kit trio first, then the legacy pair, deduplicated by
+    /// reference. No hero is hardcoded - swap or add Inspector assets and
+    /// the summon catalog follows.
+    /// </summary>
+    private List<HeroData> BuildSummonCatalog()
+    {
+        List<HeroData> catalog = new List<HeroData>();
+        TryAddToCatalog(catalog, attackHeroData);
+        TryAddToCatalog(catalog, defenseHeroData);
+        TryAddToCatalog(catalog, supportHeroData);
+        TryAddToCatalog(catalog, hero1Data);
+        TryAddToCatalog(catalog, hero2Data);
+        return catalog;
+    }
+
+    /// <summary>Adds a template to the catalog unless it is null or already present.</summary>
+    private static void TryAddToCatalog(List<HeroData> catalog, HeroData template)
+    {
+        if (template != null && !catalog.Contains(template))
+        {
+            catalog.Add(template);
         }
     }
 
