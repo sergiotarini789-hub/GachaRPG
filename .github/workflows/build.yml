@@ -34,6 +34,39 @@ jobs:
 
           echo "UNITY_PATH=$($unity.FullName)" >> $env:GITHUB_ENV
           Write-Host "Using Unity: $($unity.FullName)"
+      - name: Clean Unity Library
+        shell: powershell
+        run: |
+          Write-Host "Cleaning corrupted Unity Library..."
+
+          $library = "$env:GITHUB_WORKSPACE\Library"
+
+          if (Test-Path $library) {
+            Remove-Item $library -Recurse -Force
+            Write-Host "Library deleted."
+          } else {
+            Write-Host "Library does not exist. Nothing to clean."
+          }
+
+      - name: Build Windows
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "Build\Windows" | Out-Null
+
+          & "$env:UNITY_PATH" `
+            -batchmode `
+            -nographics `
+            -quit
+
+      - name: Build Windows
+        shell: powershell
+        run: |
+          New-Item -ItemType Directory -Force -Path "Build\Windows" | Out-Null
+
+          & "$env:UNITY_PATH" `
+            -batchmode `
+            -nographics `
+            -quit
 
       - name: Build Windows
         shell: powershell
