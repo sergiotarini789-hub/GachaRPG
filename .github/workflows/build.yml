@@ -46,11 +46,21 @@ jobs:
             -quit `
             -projectPath "$env:GITHUB_WORKSPACE" `
             -buildTarget Win64 `
-            -buildWindows64Player "$env:GITHUB_WORKSPACE\Build\Windows\GachaRPG.exe"
+            -buildWindows64Player "$env:GITHUB_WORKSPACE\Build\Windows\GachaRPG.exe" `
+            -logFile "$env:GITHUB_WORKSPACE\Build\unity-build.log"
 
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Unity build failed"
-            exit $LASTEXITCODE
+          $exitCode = $LASTEXITCODE
+
+          Write-Host "Unity exit code: $exitCode"
+
+          if (Test-Path "$env:GITHUB_WORKSPACE\Build\unity-build.log") {
+            Write-Host "===== UNITY BUILD LOG ====="
+            Get-Content "$env:GITHUB_WORKSPACE\Build\unity-build.log"
+            Write-Host "===== END UNITY BUILD LOG ====="
+          }
+
+          if ($exitCode -ne 0) {
+            throw "Unity build failed with exit code $exitCode"
           }
 
       - name: Upload Build
