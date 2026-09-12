@@ -161,7 +161,11 @@ public static class HeroProgression
         string heroId = forHero != null ? forHero.HeroId : "unknown";
         if (heroesUsingDefaultSteps.Add(heroId))
         {
-            Debug.LogWarning("HeroProgression: '" + heroId + "' has no authored awakeningSteps; " +
+            // Info, not a warning: falling back to the shared defaults is
+            // expected, working behavior during normal gameplay (every hero
+            // without authored steps uses them); real errors still log as
+            // warnings elsewhere (save/load, unresolved heroes, etc.).
+            Debug.Log("HeroProgression: '" + heroId + "' has no authored awakeningSteps; " +
                 "using the shared default steps (+4% ATK, +4% HP, +2% DEF, +1% SPD per rank). " +
                 "Assign awakening steps on the HeroData asset to customize.");
         }
@@ -209,7 +213,10 @@ public static class HeroProgression
         string heroId = forHero != null ? forHero.HeroId : "unknown";
         if (heroesUsingDefaultConstellationSteps.Add(heroId))
         {
-            Debug.LogWarning("HeroProgression: '" + heroId + "' has no authored constellationSteps; " +
+            // Info, not a warning: the shared default stat progression is the
+            // intended fallback during normal gameplay; authored per-hero
+            // steps simply override it.
+            Debug.Log("HeroProgression: '" + heroId + "' has no authored constellationSteps; " +
                 "using the shared default steps (+5% ATK / +5% HP / +5% DEF / +5% SPD / +10% ATK / +10% HP +10% ATK). " +
                 "Assign constellation steps on the HeroData asset to customize.");
         }
