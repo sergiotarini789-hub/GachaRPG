@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 /// <summary>
@@ -240,19 +241,32 @@ public class MainMenu : MonoBehaviour
         scaler.referenceResolution = new Vector2(ReferenceWidth, ReferenceHeight);
         scaler.matchWidthOrHeight = 0.5f;
 
+        // The GraphicRaycaster is what lets the EventSystem hit this Canvas's
+        // graphics at all. Unity adds one automatically to canvases created
+        // in the Editor, but NOT to ones built from code - without it, no
+        // button in this canvas can ever receive a pointer click.
+        gameObject.AddComponent<GraphicRaycaster>();
+
         RectTransform root = (RectTransform)transform;
 
-        CreateStretchedImage(root, "Background", BackgroundColor);
+        // The backdrop is raycastable so clicks on empty menu areas are
+        // consumed here instead of falling through to the battle HUD's own
+        // clickable elements behind this (higher-sorting) canvas.
+        Image background = CreateStretchedImage(root, "Background", BackgroundColor);
+        background.raycastTarget = true;
 
         BuildTopBar(root);
         BuildCenterViews(root);
         BuildBottomNav(root);
 
         // Button clicks need an EventSystem; create one only if the scene
-        // does not already provide it (BattleHud uses the same guard).
+        // does not already provide it (BattleHud uses the same guard). The
+        // input module must match the project's Active Input Handling: this
+        // project uses the Input System package only, so the legacy
+        // StandaloneInputModule could never deliver pointer events here.
         if (FindFirstObjectByType<EventSystem>() == null)
         {
-            new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
+            new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
         }
     }
 
@@ -475,6 +489,9 @@ public class MainMenu : MonoBehaviour
 
         Image back = CreateSlicedImage(rect, "Back", GoldAccent, panelSprite,
             TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
+        // Raycastable so the EventSystem can hit the button (the image
+        // factory disables raycast targets for decoration).
+        back.raycastTarget = true;
         CreateSlicedImage(rect, "Border", GoldAccentDark, frameSprite,
             TopLeft, TopLeft, new Vector2(-4f, -4f), new Vector2(BattleButtonWidth + 8f, BattleButtonHeight + 8f));
 
@@ -646,6 +663,9 @@ public class MainMenu : MonoBehaviour
 
         Image back = CreateSlicedImage(rect, "Back", NavInactiveColor, panelSprite,
             TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
+        // Raycastable so the EventSystem can hit the tab (the image factory
+        // disables raycast targets for decoration).
+        back.raycastTarget = true;
 
         Text text = CreateText(rect, "Label", label, NavLabelFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
             new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);

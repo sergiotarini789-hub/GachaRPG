@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
+using UnityEngine.InputSystem.UI;
 using UnityEngine.UI;
 
 /// <summary>
@@ -411,6 +412,12 @@ public class BattleHud : MonoBehaviour
         scaler.referenceResolution = new Vector2(ReferenceWidth, ReferenceHeight);
         scaler.matchWidthOrHeight = 0.5f;
 
+        // The GraphicRaycaster is what lets the EventSystem hit this Canvas's
+        // graphics at all. Unity adds one automatically to canvases created
+        // in the Editor, but NOT to ones built from code - without it, the
+        // enemy-slot clicks and the AUTO/SPEED toggles could never fire.
+        gameObject.AddComponent<GraphicRaycaster>();
+
         RectTransform root = (RectTransform)transform;
 
         CreateStretchedImage(root, "Background", BackgroundColor);
@@ -423,10 +430,13 @@ public class BattleHud : MonoBehaviour
         BuildResultBanner(root);
 
         // Slot clicks and toggle buttons need an EventSystem; create one only
-        // if the scene does not already provide it.
+        // if the scene does not already provide it. The input module must
+        // match the project's Active Input Handling: this project uses the
+        // Input System package only, so the legacy StandaloneInputModule
+        // could never deliver pointer events here.
         if (FindFirstObjectByType<EventSystem>() == null)
         {
-            new GameObject("EventSystem", typeof(EventSystem), typeof(StandaloneInputModule));
+            new GameObject("EventSystem", typeof(EventSystem), typeof(InputSystemUIInputModule));
         }
     }
 
