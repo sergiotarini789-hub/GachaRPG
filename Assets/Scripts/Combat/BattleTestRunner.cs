@@ -94,6 +94,12 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
     private bool battleRunning;
 
+    /// <summary>Handle of the running 3v3 coroutine, so StopBattle can end it mid-run.</summary>
+    private Coroutine battleCoroutine;
+
+    /// <summary>True while the battle is paused through the HUD's pause menu; freezes turn pacing without touching battle state.</summary>
+    private bool battlePaused;
+
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
 
@@ -149,7 +155,7 @@ public class BattleTestRunner : MonoBehaviour
 
         // Direct-battle mode: identical to the original flow.
         hud = BattleHud.Create(this);
-        StartCoroutine(RunTeamBattleRoutine());
+        battleCoroutine = StartCoroutine(RunTeamBattleRoutine());
     }
 
     /// <summary>
@@ -174,7 +180,64 @@ public class BattleTestRunner : MonoBehaviour
             hud = BattleHud.Create(this);
         }
 
-        StartCoroutine(RunTeamBattleRoutine());
+        battleCoroutine = StartCoroutine(RunTeamBattleRoutine());
+    }
+
+    /// <summary>
+    /// Pauses or resumes the battle from the HUD's pause menu. Pausing sets
+    /// Time.timeScale to 0, which immediately freezes the in-flight turn
+    /// delay (WaitForSeconds runs on scaled time); the battle loop also
+    /// holds at its pause gate. Resuming restores the time scale and the
+    /// interrupted wait continues with its remaining time - the current
+    /// battle state is never touched, so RESUME continues exactly where the
+    /// battle stopped.
+    /// </summary>
+    public void SetBattlePaused(bool paused)
+    {
+        battlePaused = paused;
+        Time.timeScale = paused ? 0f : 1f;
+    }
+
+    /// <summary>
+    /// Stops the current battle cleanly (the pause menu's EXIT BATTLE):
+    /// ends the routine mid-run, clears the pause state, restores the time
+    /// scale, and flags the battle as ended. Re-shows the main menu when
+    /// there is one; the next StartBattleFromMenu call starts a fresh
+    /// battle with rebuilt teams, exactly like the first run.
+    /// </summary>
+    public void StopBattle()
+    {
+        if (battleCoroutine != null)
+        {
+            StopCoroutine(battleCoroutine);
+            battleCoroutine = null;
+        }
+
+        battlePaused = false;
+        Time.timeScale = 1f;
+        battleRunning = false;
+
+        battleEnded = true;
+        winnerName = "Nobody";
+
+        if (hud != null)
+        {
+            hud.SetActiveHero(null);
+        }
+
+        if (menu != null)
+        {
+            menu.gameObject.SetActive(true);
+        }
+    }
+
+    /// <summary>Restores the time scale when disabled while a pause is active, so a paused battle can never leak a frozen clock.</summary>
+    private void OnDisable()
+    {
+        if (battlePaused)
+        {
+            SetBattlePaused(false);
+        }
     }
 
     /// <summary>Starts a 1v1 battle with no injected skills (kept for minimal regression testing).</summary>
@@ -373,6 +436,15 @@ public class BattleTestRunner : MonoBehaviour
             // One-second breather between turns so the fight unfolds visibly.
             yield return new WaitForSeconds(SecondsPerTurn);
 
+            // Pause gate: while the HUD's pause menu is open, hold here
+            // without resolving a turn. Pausing also sets Time.timeScale to
+            // 0, which freezes the wait above mid-flight; this gate covers
+            // the frame the pause landed between the wait and the turn.
+            while (battlePaused && !teamBattle.BattleOver)
+            {
+                yield return null;
+            }
+
             HeroInstance actor = teamBattle.GetNextActor();
             if (actor == null)
             {
@@ -421,6 +493,7 @@ public class BattleTestRunner : MonoBehaviour
         }
 
         battleRunning = false;
+        battleCoroutine = null;
 
         // Return to the main menu so the whole flow (menu -> battle -> menu)
         // can be replayed within one Play session; the result banner stays

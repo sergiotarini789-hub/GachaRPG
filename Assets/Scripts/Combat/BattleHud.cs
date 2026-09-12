@@ -24,7 +24,11 @@ using UnityEngine.UI;
 ///   three skill slots fed from the acting hero's kit, and AUTO / SPEED
 ///   placeholder toggles (visual only - they drive no combat logic);
 /// - a centered result banner, hidden until the battle ends: "Victory!" when
-///   team 1 wins, "Defeat!" when team 2 wins, "Draw!" when nobody does.
+///   team 1 wins, "Defeat!" when team 2 wins, "Draw!" when nobody does;
+/// - a PAUSE button beside the battle log: it freezes the battle (turn
+///   pacing only, runner-owned) behind a full-screen pause overlay with
+///   RESUME and EXIT BATTLE, the latter guarded by a LEAVE BATTLE?
+///   confirmation.
 ///
 /// Hero presentation states are pure UI: alive, dead (dimmed row, dark
 /// portrait, empty bar), currently acting (pulsing gold frame - set through
@@ -118,6 +122,9 @@ public class BattleHud : MonoBehaviour
     /// <summary>Top-left anchor point, shared by most child rects.</summary>
     private static readonly Vector2 TopLeft = new Vector2(0f, 1f);
 
+    /// <summary>Top-center anchor point.</summary>
+    private static readonly Vector2 TopCenter = new Vector2(0.5f, 1f);
+
     /// <summary>Reference width the CanvasScaler scales against.</summary>
     private const float ReferenceWidth = 1920f;
 
@@ -202,6 +209,30 @@ public class BattleHud : MonoBehaviour
     /// <summary>Font size of the result banner.</summary>
     private const int BannerFontSize = 60;
 
+    /// <summary>Full-screen dim behind the pause overlay; doubles as the click blocker while paused.</summary>
+    private static readonly Color PauseBackdropColor = new Color(0f, 0f, 0f, 0.78f);
+
+    /// <summary>Full-screen dim behind the LEAVE BATTLE? confirmation; slightly darker.</summary>
+    private static readonly Color ConfirmBackdropColor = new Color(0f, 0f, 0f, 0.85f);
+
+    /// <summary>Dimmed subtitle text inside the confirmation dialog.</summary>
+    private static readonly Color OverlaySubColor = new Color(1f, 1f, 1f, 0.55f);
+
+    /// <summary>Font size of the PAUSE button label.</summary>
+    private const int PauseButtonFontSize = 18;
+
+    /// <summary>Font size of the PAUSED overlay title.</summary>
+    private const int PauseTitleFontSize = 40;
+
+    /// <summary>Font size of the LEAVE BATTLE? title.</summary>
+    private const int ConfirmTitleFontSize = 36;
+
+    /// <summary>Font size of the confirmation subtitle.</summary>
+    private const int ConfirmSubFontSize = 20;
+
+    /// <summary>Font size of overlay buttons (RESUME / EXIT BATTLE / YES / NO).</summary>
+    private const int OverlayButtonFontSize = 24;
+
     // ---------------------------------------------------------------------
     // Runtime state: views built once in Awake plus cached values so the
     // per-frame refresh does near-zero work when nothing changed.
@@ -255,6 +286,18 @@ public class BattleHud : MonoBehaviour
 
     /// <summary>Border frame of the banner, tinted by the result color.</summary>
     private Image resultBorder;
+
+    /// <summary>The PAUSE button (beside the battle log); visible only while a battle is live.</summary>
+    private GameObject pauseButtonRoot;
+
+    /// <summary>Full-screen pause overlay: dim + PAUSED panel with RESUME / EXIT BATTLE.</summary>
+    private GameObject pauseOverlay;
+
+    /// <summary>Full-screen LEAVE BATTLE? confirmation, shown on top of the pause overlay.</summary>
+    private GameObject confirmOverlay;
+
+    /// <summary>Cached pause-button visibility so unchanged frames do no work.</summary>
+    private bool cachedPauseButtonVisible;
 
     /// <summary>Team most recently bound to the panels (rebinds when a new 3v3 starts).</summary>
     private Team boundTeam1;
@@ -428,6 +471,7 @@ public class BattleHud : MonoBehaviour
         BuildLogPanel(root);
         BuildActionBar(root);
         BuildResultBanner(root);
+        BuildPauseUi(root);
 
         // Slot clicks and toggle buttons need an EventSystem; create one only
         // if the scene does not already provide it. The input module must
@@ -471,6 +515,7 @@ public class BattleHud : MonoBehaviour
         RefreshSlots(rightSlots);
         RefreshLog();
         RefreshBanner();
+        RefreshPauseButton();
         RefreshActionBar();
     }
 
@@ -1018,6 +1063,212 @@ public class BattleHud : MonoBehaviour
     private static string InitialOf(string heroName)
     {
         return string.IsNullOrEmpty(heroName) ? "?" : heroName.Substring(0, 1).ToUpperInvariant();
+    }
+
+    // ---------------------------------------------------------------------
+    // Pause menu (battle UX only - pausing freezes the runner's turn pacing;
+    // no battle state is ever modified).
+    // ---------------------------------------------------------------------
+
+    /// <summary>
+    /// Builds the pause UI: a compact PAUSE button in the gap between the
+    /// battle log and the enemy panel, a centered pause overlay (RESUME /
+    /// EXIT BATTLE), and a LEAVE BATTLE? confirmation above it. Both
+    /// overlays are full-screen raycastable blockers, so the battle UI
+    /// cannot be clicked while they are open.
+    /// </summary>
+    private void BuildPauseUi(RectTransform root)
+    {
+        // ---- PAUSE button ----
+        RectTransform buttonRect = CreateRect(root, "PauseButton");
+        buttonRect.anchorMin = TopCenter;
+        buttonRect.anchorMax = TopCenter;
+        buttonRect.pivot = new Vector2(0.5f, 1f);
+        buttonRect.anchoredPosition = new Vector2(385f, -ScreenMargin);
+        buttonRect.sizeDelta = new Vector2(94f, 56f);
+
+        // Created directly (not via the image factory) so it stays raycastable.
+        Image buttonBack = buttonRect.gameObject.AddComponent<Image>();
+        buttonBack.sprite = panelSprite;
+        buttonBack.type = Image.Type.Sliced;
+        buttonBack.color = ActionSlotDimColor;
+
+        CreateSlicedImage(buttonRect, "Border", ActionSlotReadyColor, frameSprite,
+            TopLeft, TopLeft, new Vector2(-3f, -3f), new Vector2(100f, 62f));
+
+        Text pauseLabel = CreateText(buttonRect, "Label", "PAUSE",
+            PauseButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        Stretch(pauseLabel.rectTransform);
+
+        Button pauseButton = buttonRect.gameObject.AddComponent<Button>();
+        pauseButton.targetGraphic = buttonBack;
+        pauseButton.onClick.AddListener(OnPauseClicked);
+
+        pauseButtonRoot = buttonRect.gameObject;
+        pauseButtonRoot.SetActive(false);
+
+        // ---- Pause overlay (full-screen blocker + centered panel) ----
+        pauseOverlay = CreateOverlayBlocker(root, "PauseOverlay", PauseBackdropColor);
+        BuildPausePanel(pauseOverlay.transform);
+        pauseOverlay.SetActive(false);
+
+        // ---- LEAVE BATTLE? confirmation (built after, renders above) ----
+        confirmOverlay = CreateOverlayBlocker(root, "ConfirmOverlay", ConfirmBackdropColor);
+        BuildConfirmPanel(confirmOverlay.transform);
+        confirmOverlay.SetActive(false);
+    }
+
+    /// <summary>Builds the PAUSED panel: title, RESUME, and EXIT BATTLE.</summary>
+    private void BuildPausePanel(Transform parent)
+    {
+        RectTransform panel = CreateRect(parent, "Panel");
+        panel.anchorMin = new Vector2(0.5f, 0.5f);
+        panel.anchorMax = new Vector2(0.5f, 0.5f);
+        panel.pivot = new Vector2(0.5f, 0.5f);
+        panel.anchoredPosition = Vector2.zero;
+        panel.sizeDelta = new Vector2(560f, 420f);
+
+        CreateSlicedImage(panel, "Back", ActionBarColor, panelSprite, TopLeft, TopLeft, Vector2.zero, panel.sizeDelta);
+        CreateSlicedImage(panel, "Border", PlayerAccent, frameSprite, TopLeft, TopLeft, Vector2.zero, panel.sizeDelta);
+
+        CreateText(panel, "Title", "PAUSED", PauseTitleFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            TopCenter, TopCenter, new Vector2(0f, -56f), new Vector2(460f, 44f)).color = PlayerAccent;
+
+        CreateOverlayButton(panel, "ResumeButton", "RESUME", PlayerAccent, TextOnGold,
+            new Vector2(0f, -160f), new Vector2(420f, 86f), OnResumeClicked);
+
+        CreateOverlayButton(panel, "ExitButton", "EXIT BATTLE", ActionSlotDimColor, Color.white,
+            new Vector2(0f, -268f), new Vector2(420f, 86f), OnExitBattleClicked);
+    }
+
+    /// <summary>Builds the LEAVE BATTLE? panel: title, subtitle, YES, NO.</summary>
+    private void BuildConfirmPanel(Transform parent)
+    {
+        RectTransform panel = CreateRect(parent, "Panel");
+        panel.anchorMin = new Vector2(0.5f, 0.5f);
+        panel.anchorMax = new Vector2(0.5f, 0.5f);
+        panel.pivot = new Vector2(0.5f, 0.5f);
+        panel.anchoredPosition = Vector2.zero;
+        panel.sizeDelta = new Vector2(660f, 430f);
+
+        CreateSlicedImage(panel, "Back", ActionBarColor, panelSprite, TopLeft, TopLeft, Vector2.zero, panel.sizeDelta);
+        CreateSlicedImage(panel, "Border", EnemyAccent, frameSprite, TopLeft, TopLeft, Vector2.zero, panel.sizeDelta);
+
+        CreateText(panel, "Title", "LEAVE BATTLE?", ConfirmTitleFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            TopCenter, TopCenter, new Vector2(0f, -60f), new Vector2(560f, 42f));
+
+        CreateText(panel, "Sub", "Current battle progress will be lost.", ConfirmSubFontSize, FontStyle.Normal,
+            TextAnchor.MiddleCenter, TopCenter, TopCenter, new Vector2(0f, -112f), new Vector2(560f, 26f)).color = OverlaySubColor;
+
+        CreateOverlayButton(panel, "YesButton", "YES", EnemyAccent, Color.white,
+            new Vector2(-150f, -260f), new Vector2(260f, 86f), OnConfirmYesClicked);
+
+        CreateOverlayButton(panel, "NoButton", "NO", ActionSlotDimColor, Color.white,
+            new Vector2(150f, -260f), new Vector2(260f, 86f), OnConfirmNoClicked);
+    }
+
+    /// <summary>
+    /// Creates a full-screen blocker: a stretched, raycastable dark Image
+    /// that dims the battle and swallows every click while an overlay is
+    /// open (the panels are its children, so they render - and receive
+    /// clicks - above it).
+    /// </summary>
+    private GameObject CreateOverlayBlocker(RectTransform parent, string name, Color color)
+    {
+        RectTransform rect = CreateRect(parent, name);
+        Stretch(rect);
+        Image image = rect.gameObject.AddComponent<Image>();
+        image.color = color;
+        image.raycastTarget = true;
+        return rect.gameObject;
+    }
+
+    /// <summary>
+    /// Creates one overlay button: a rounded, raycastable panel with a bold
+    /// centered label. The image is created directly so it stays raycastable
+    /// (the shared factory disables raycast targets for decoration).
+    /// </summary>
+    private void CreateOverlayButton(RectTransform parent, string name, string label, Color backColor, Color textColor, Vector2 center, Vector2 size, UnityEngine.Events.UnityAction onClick)
+    {
+        RectTransform rect = CreateRect(parent, name);
+        rect.anchorMin = new Vector2(0.5f, 0.5f);
+        rect.anchorMax = new Vector2(0.5f, 0.5f);
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.anchoredPosition = center;
+        rect.sizeDelta = size;
+
+        Image back = rect.gameObject.AddComponent<Image>();
+        back.sprite = panelSprite;
+        back.type = Image.Type.Sliced;
+        back.color = backColor;
+
+        Button button = rect.gameObject.AddComponent<Button>();
+        button.targetGraphic = back;
+        button.onClick.AddListener(onClick);
+
+        Text text = CreateText(rect, "Label", label, OverlayButtonFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0.5f), new Vector2(0.5f, 0.5f), Vector2.zero, Vector2.zero);
+        Stretch(text.rectTransform);
+        text.color = textColor;
+    }
+
+    /// <summary>Shows the PAUSE button only while a battle is actually live.</summary>
+    private void RefreshPauseButton()
+    {
+        bool visible = runner != null && !runner.BattleEnded && leftSlots.Count > 0;
+        if (visible != cachedPauseButtonVisible)
+        {
+            cachedPauseButtonVisible = visible;
+            pauseButtonRoot.SetActive(visible);
+        }
+    }
+
+    /// <summary>PAUSE button: freezes the battle (runner-owned pacing) and opens the pause overlay.</summary>
+    private void OnPauseClicked()
+    {
+        if (runner == null || runner.BattleEnded)
+        {
+            return;
+        }
+
+        runner.SetBattlePaused(true);
+        pauseOverlay.SetActive(true);
+    }
+
+    /// <summary>RESUME: closes the pause UI and unpauses; the current battle continues exactly where it stopped.</summary>
+    private void OnResumeClicked()
+    {
+        if (runner != null)
+        {
+            runner.SetBattlePaused(false);
+        }
+
+        pauseOverlay.SetActive(false);
+        confirmOverlay.SetActive(false);
+    }
+
+    /// <summary>EXIT BATTLE: opens the LEAVE BATTLE? confirmation on top of the pause overlay (battle stays paused).</summary>
+    private void OnExitBattleClicked()
+    {
+        confirmOverlay.SetActive(true);
+    }
+
+    /// <summary>YES: stops the battle cleanly and returns to the main menu (the runner re-shows it).</summary>
+    private void OnConfirmYesClicked()
+    {
+        confirmOverlay.SetActive(false);
+        pauseOverlay.SetActive(false);
+        if (runner != null)
+        {
+            runner.StopBattle();
+        }
+    }
+
+    /// <summary>NO: closes the confirmation and returns to the pause menu (battle stays paused).</summary>
+    private void OnConfirmNoClicked()
+    {
+        confirmOverlay.SetActive(false);
     }
 
     // ---------------------------------------------------------------------
