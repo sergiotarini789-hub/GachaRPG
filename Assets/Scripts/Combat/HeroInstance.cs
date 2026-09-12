@@ -6,11 +6,18 @@ using UnityEngine;
 /// Plain C# class representing one owned hero at runtime, instantiated from
 /// a <see cref="HeroData"/> template. Owns ALL of the hero's progression
 /// state - level, experience, ascension rank, awakening rank, constellation
-/// rank (C0-C6, one per duplicate copy of this hero), and per-skill levels -
-/// and derives its combat stats from the template's base stats plus its
-/// <see cref="HeroGrowth"/> curve and the ascension, awakening, and
-/// constellation modifiers (see <see cref="CalculateCurrentStats"/>). The
+/// rank (C0-C6, one per duplicate copy of this hero), per-skill levels, and
+/// the six equipment slots - and derives its combat stats from the
+/// template's base stats plus its <see cref="HeroGrowth"/> curve, the
+/// ascension, awakening, and constellation modifiers, and the equipment
+/// loadout's flat bonuses (see <see cref="CalculateCurrentStats"/>). The
 /// template asset never changes: progression mutates only this instance.
+///
+/// Equipment is LENT to the hero, never owned: the
+/// <see cref="EquipmentInventory"/> owns every item and is the only system
+/// that changes what this hero wears (see
+/// <see cref="AttachEquipment"/>/<see cref="DetachEquipment"/>); a hero
+/// with no equipment calculates exactly the stats it always did.
 ///
 /// The effective maximum level is ascension-controlled (see
 /// <see cref="MaxLevel"/>); duplicate summons of the same template raise the
@@ -63,6 +70,15 @@ public class HeroInstance
 
     /// <summary>Turns remaining before each tracked skill is usable again. Skills not in the map are ready.</summary>
     private Dictionary<SkillData, int> cooldownTracker;
+
+    /// <summary>
+    /// The hero's six equipment slots (slot -> the lent
+    /// <see cref="EquipmentInstance"/>). Empty for a fresh hero. Mutated
+    /// ONLY through <see cref="AttachEquipment"/>/
+    /// <see cref="DetachEquipment"/> - those are the
+    /// <see cref="EquipmentInventory"/>'s tools, not gameplay APIs.
+    /// </summary>
+    private readonly Dictionary<EquipmentSlot, EquipmentInstance> equippedItems = new Dictionary<EquipmentSlot, EquipmentInstance>();
 
     /// <summary>Level of each kit skill (missing entries are level 1); scales the skill's effect power.</summary>
     private readonly Dictionary<SkillData, int> skillLevels = new Dictionary<SkillData, int>();
@@ -262,15 +278,16 @@ public class HeroInstance
     /// Recomputes current stats through the single modifier pipeline:
     /// base + per-level growth (exactly as before), then multiplied by the
     /// ascension bonus (per rank) and the accumulated awakening AND
-    /// constellation bonuses (each summed per reached rank). The whole
-    /// calculation is deterministic from the template's base stats plus
-    /// this instance's progression state - it never reads or mutates the
-    /// previously calculated values, so refreshing the UI can never
-    /// compound bonuses. Future modifiers (equipment, weapons, artifacts,
-    /// buffs) extend this same method. With no ascension, awakening, or
-    /// constellations the values are identical to the raw growth-curve
-    /// results. Current health is clamped to the new maximum, so gaining
-    /// progression never reduces health.
+    /// constellation bonuses (each summed per reached rank), and finally the
+    /// equipment loadout's flat bonuses (main stats, substats, set bonuses)
+    /// are added on top. The whole calculation is deterministic from the
+    /// template's base stats plus this instance's progression state - it
+    /// never reads or mutates the previously calculated values, so
+    /// refreshing the UI or re-equipping can never compound bonuses. Future
+    /// modifiers (buffs) extend this same method. With no ascension,
+    /// awakening, constellations, or equipment the values are identical to
+    /// the raw growth-curve results. Current health is clamped to the new
+    /// maximum, so gaining progression never reduces health.
     /// </summary>
     public void CalculateCurrentStats()
     {
@@ -292,10 +309,17 @@ public class HeroInstance
         GetAwakeningBonuses(out float healthBonus, out float attackBonus, out float defenseBonus, out float speedBonus);
         GetConstellationBonuses(out float constellationHealth, out float constellationAttack, out float constellationDefense, out float constellationSpeed);
 
-        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + (healthBonus + constellationHealth) * 0.01f)));
-        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + (attackBonus + constellationAttack) * 0.01f)));
-        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + (defenseBonus + constellationDefense) * 0.01f)));
-        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + (speedBonus + constellationSpeed) * 0.01f)));
+        // Equipment modifier: flat additions on top of the percentage
+        // pipeline (main stats + substats + set bonuses), summed by the
+        // ONE central equipment calculator - never recomputed anywhere
+        // else, so bonuses cannot double-apply, and an unequipped hero
+        // contributes exactly zero (stats identical to pre-equipment).
+        EquipmentStats.GetLoadoutStats(this, out int equipmentHealth, out int equipmentAttack, out int equipmentDefense, out int equipmentSpeed);
+
+        maxHealth = Mathf.Max(1, Mathf.RoundToInt(health * ascensionMultiplier * (1f + (healthBonus + constellationHealth) * 0.01f)) + equipmentHealth);
+        currentAttack = Mathf.Max(1, Mathf.RoundToInt(attack * ascensionMultiplier * (1f + (attackBonus + constellationAttack) * 0.01f)) + equipmentAttack);
+        currentDefense = Mathf.Max(1, Mathf.RoundToInt(defense * ascensionMultiplier * (1f + (defenseBonus + constellationDefense) * 0.01f)) + equipmentDefense);
+        currentSpeed = Mathf.Max(1, Mathf.RoundToInt(speed * ascensionMultiplier * (1f + (speedBonus + constellationSpeed) * 0.01f)) + equipmentSpeed);
 
         if (currentHealth > maxHealth)
         {
@@ -687,16 +711,67 @@ public class HeroInstance
     }
 
     // ---------------------------------------------------------------------
+    // Equipment slots. The EquipmentInventory owns all items and is the
+    // only caller of Attach/Detach; everything else reads.
+    // ---------------------------------------------------------------------
+
+    /// <summary>The item equipped in the given slot, or null when the slot is empty.</summary>
+    public EquipmentInstance GetEquippedItem(EquipmentSlot slot)
+    {
+        return equippedItems.TryGetValue(slot, out EquipmentInstance item) ? item : null;
+    }
+
+    /// <summary>The instance id of the item equipped in the slot, or an empty string (save support).</summary>
+    public string GetEquippedItemId(EquipmentSlot slot)
+    {
+        return GetEquippedItem(slot) != null ? GetEquippedItem(slot).instanceId : string.Empty;
+    }
+
+    /// <summary>How many of the six slots currently hold an item.</summary>
+    public int EquippedItemCount => equippedItems.Count;
+
+    /// <summary>
+    /// Lends the item to this hero in the given slot and recalculates stats.
+    /// EquipmentInventory ONLY: validates the item belongs in the slot.
+    /// Equipping never duplicates an item or touches the inventory - the
+    /// caller manages ownership and the previous slot occupant.
+    /// </summary>
+    public bool AttachEquipment(EquipmentSlot slot, EquipmentInstance item)
+    {
+        if (item == null || item.slot != slot)
+        {
+            return false;
+        }
+
+        equippedItems[slot] = item;
+        CalculateCurrentStats();
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the slot's item to the inventory pool and recalculates stats
+    /// (the item itself is never destroyed). EquipmentInventory ONLY.
+    /// </summary>
+    public void DetachEquipment(EquipmentSlot slot)
+    {
+        if (equippedItems.Remove(slot))
+        {
+            CalculateCurrentStats();
+        }
+    }
+
+    // ---------------------------------------------------------------------
     // Battle & persistence support.
     // ---------------------------------------------------------------------
 
     /// <summary>
     /// Creates a battle-ready copy of this hero: the same template, level,
-    /// XP, ascension, awakening, constellation, and skill levels, with
-    /// freshly calculated stats at full health. Battles mutate only the copy
-    /// (health, cooldowns), so the roster's authoritative progression is
-    /// never dirtied - the clone is re-derived from this instance at every
-    /// battle start, making the roster the single source of truth.
+    /// XP, ascension, awakening, constellation, skill levels, and equipment
+    /// loadout, with freshly calculated stats (equipment included) at full
+    /// health. Battles mutate only the copy (health, cooldowns), so the
+    /// roster's authoritative progression is never dirtied - the clone is
+    /// re-derived from this instance at every battle start, making the
+    /// roster the single source of truth.
     /// </summary>
     public HeroInstance CreateCombatClone()
     {
@@ -707,6 +782,14 @@ public class HeroInstance
         clone.ascensionRank = ascensionRank;
         clone.awakeningRank = awakeningRank;
         clone.constellationRank = constellationRank;
+
+        // Battle uses the hero's final calculated stats, so the clone wears
+        // the same equipment (shared references: combat never mutates items,
+        // and the stat recalculation below applies their bonuses).
+        foreach (KeyValuePair<EquipmentSlot, EquipmentInstance> pair in equippedItems)
+        {
+            clone.equippedItems[pair.Key] = pair.Value;
+        }
         foreach (KeyValuePair<SkillData, int> pair in skillLevels)
         {
             clone.skillLevels[pair.Key] = pair.Value;

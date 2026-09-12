@@ -122,6 +122,22 @@ public class BattleTestRunner : MonoBehaviour
     /// </summary>
     private PlayerWallet wallet;
 
+    /// <summary>
+    /// The player's owned equipment: every EquipmentInstance plus the
+    /// authoritative equip-state bookkeeping. Heroes only borrow items
+    /// through its equip/unequip path; resetting or losing a hero never
+    /// destroys equipment. Persisted with the roster and wallet.
+    /// </summary>
+    private EquipmentInventory equipmentInventory;
+
+    /// <summary>
+    /// The prototype equipment templates summons/tools create items from
+    /// and saves resolve template ids against. Built once per session in
+    /// Start (runtime-created ScriptableObjects - replace with authored
+    /// assets later without touching any other system).
+    /// </summary>
+    private List<EquipmentData> equipmentCatalog;
+
     /// <summary>True while the 3v3 coroutine is resolving; guards against double starts from the menu.</summary>
     private bool battleRunning;
 
@@ -212,6 +228,10 @@ public class BattleTestRunner : MonoBehaviour
 
     private void Start()
     {
+        // The prototype equipment catalog is built first so the profile
+        // load can resolve saved equipment templates by stable id.
+        equipmentCatalog = BuildEquipmentCatalog();
+
         // The roster (the player's owned heroes) and wallet load from the
         // local save when one exists, and fall back to the initial grant
         // otherwise; the Heroes collection reads the roster from the menu.
@@ -373,11 +393,64 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
+    /// Builds the prototype equipment catalog: one template per slot across
+    /// every rarity (plus a second weapon and three "Vanguard" set pieces),
+    /// created as runtime ScriptableObjects - no authored assets required
+    /// and nothing is hardcoded in any UI. Replace with authored
+    /// EquipmentData assets later without touching any other system: saves
+    /// resolve templates by stable EquipmentId against whatever catalog is
+    /// provided here.
+    /// </summary>
+    private static List<EquipmentData> BuildEquipmentCatalog()
+    {
+        List<EquipmentData> catalog = new List<EquipmentData>
+        {
+            CreateEquipmentTemplate("trainee_blade", "Trainee Blade", EquipmentSlot.Weapon, HeroRarity.Common, EquipmentStatType.ATK, 8, 1.5f, ""),
+            CreateEquipmentTemplate("tempest_fang", "Tempest Fang", EquipmentSlot.Weapon, HeroRarity.Epic, EquipmentStatType.ATK, 15, 3f, "vanguard"),
+            CreateEquipmentTemplate("warden_helm", "Warden Helm", EquipmentSlot.Helmet, HeroRarity.Rare, EquipmentStatType.HP, 60, 8f, "vanguard"),
+            CreateEquipmentTemplate("warden_plate", "Warden Plate", EquipmentSlot.Armor, HeroRarity.Rare, EquipmentStatType.DEF, 6, 1.2f, "vanguard"),
+            CreateEquipmentTemplate("storm_gauntlets", "Storm Gauntlets", EquipmentSlot.Gloves, HeroRarity.Epic, EquipmentStatType.ATK, 10, 2f, ""),
+            CreateEquipmentTemplate("scout_boots", "Scout Boots", EquipmentSlot.Boots, HeroRarity.Common, EquipmentStatType.SPD, 2, 0.4f, ""),
+            CreateEquipmentTemplate("vanguard_signet", "Signet of the Vanguard", EquipmentSlot.Accessory, HeroRarity.Legendary, EquipmentStatType.HP, 100, 15f, "vanguard"),
+        };
+        return catalog;
+    }
+
+    /// <summary>
+    /// Creates one runtime equipment template. Prototype content only -
+    /// main-stat/slot legality follows the central rules
+    /// (<see cref="EquipmentProgression.IsMainStatAllowed"/>), and every
+    /// field here is authored data a real asset would carry.
+    /// </summary>
+    private static EquipmentData CreateEquipmentTemplate(
+        string id,
+        string displayName,
+        EquipmentSlot slot,
+        HeroRarity rarity,
+        EquipmentStatType mainStatType,
+        int mainStatBaseValue,
+        float mainStatPerLevel,
+        string setId)
+    {
+        EquipmentData template = ScriptableObject.CreateInstance<EquipmentData>();
+        template.equipmentId = id;
+        template.equipmentName = displayName;
+        template.slot = slot;
+        template.rarity = rarity;
+        template.mainStatType = mainStatType;
+        template.mainStatBaseValue = mainStatBaseValue;
+        template.mainStatPerLevel = mainStatPerLevel;
+        template.setId = setId;
+        return template;
+    }
+
+    /// <summary>
     /// Loads the player profile from the local save (older formats are
-    /// migrated forward - Hero Souls became the C0-C6 constellation), or
-    /// builds the initial grant when no valid save exists, then safely
-    /// consolidates any legacy duplicate roster entries into constellation
-    /// progress. The wallet always exists so progression actions have
+    /// migrated forward - Hero Souls became the C0-C6 constellation; saves
+    /// without equipment restore an empty inventory), or builds the initial
+    /// grant when no valid save exists, then safely consolidates any legacy
+    /// duplicate roster entries into constellation progress. The wallet and
+    /// equipment inventory always exist so progression actions have
     /// something to consume from.
     /// </summary>
     private void LoadProfile()
@@ -402,21 +475,35 @@ public class BattleTestRunner : MonoBehaviour
         // Safe migration for data created before duplicates consolidated:
         // extras become constellation ranks (Hero Tokens past C6).
         roster.ConsolidateDuplicates(wallet);
+
+        // The equipment inventory restores AFTER consolidation, so only the
+        // surviving hero per template receives equipped items (pre-equipment
+        // saves restore an empty inventory).
+        equipmentInventory = save != null
+            ? PlayerSaveSystem.RestoreEquipment(save, roster, equipmentCatalog)
+            : new EquipmentInventory(roster);
     }
 
     /// <summary>The player's placeholder resource wallet; progression actions consume from it.</summary>
     public PlayerWallet Wallet => wallet;
 
+    /// <summary>The player's equipment inventory; equipping and item management flow through it.</summary>
+    public EquipmentInventory EquipmentInventory => equipmentInventory;
+
+    /// <summary>The prototype equipment templates new items are created from.</summary>
+    public IReadOnlyList<EquipmentData> EquipmentCatalog => equipmentCatalog;
+
     /// <summary>
-    /// Persists the roster and wallet immediately. Called after every
-    /// progression change (level up, ascend, awaken, skill upgrade, summon,
-    /// debug actions) and on quit, so progression always survives a restart.
+    /// Persists the roster, wallet, and equipment inventory immediately.
+    /// Called after every progression change (level up, ascend, awaken,
+    /// skill upgrade, summon, equip/unequip, equipment upgrade, debug
+    /// actions) and on quit, so progression always survives a restart.
     /// </summary>
     public void SaveProfile()
     {
         if (roster != null && wallet != null)
         {
-            PlayerSaveSystem.Save(roster, wallet);
+            PlayerSaveSystem.Save(roster, wallet, equipmentInventory);
         }
     }
 

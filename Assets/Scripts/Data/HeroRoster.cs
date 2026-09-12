@@ -93,6 +93,31 @@ public class HeroRoster
     }
 
     /// <summary>
+    /// The player's instance of the hero with the given stable
+    /// <see cref="HeroData.HeroId"/>, or null. Used by systems that know a
+    /// hero id without holding the template (equipment ownership, future
+    /// rewards); with consolidated duplicates there is exactly one instance
+    /// per id.
+    /// </summary>
+    public HeroInstance FindByHeroId(string heroId)
+    {
+        if (string.IsNullOrEmpty(heroId))
+        {
+            return null;
+        }
+
+        foreach (HeroInstance hero in heroes)
+        {
+            if (hero != null && hero.data != null && hero.data.HeroId == heroId)
+            {
+                return hero;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// THE authoritative duplicate path - summons, the Heroes screen's
     /// debug duplicate tool, and any future system all apply duplicates
     /// through here, so the constellation can never become inconsistent:

@@ -26,8 +26,10 @@ using UnityEngine.UI;
 ///   placeholder, name, rarity, role, level, current XP and the XP
 ///   required for the next level, ascension rank, awakening rank,
 ///   constellation rank (C0-C6, one per duplicate copy) with the next
-///   rank's planned effect, current stats (HP / ATK / DEF / SPD), and its
-///   skills with per-skill levels;
+///   rank's planned effect, current stats (HP / ATK / DEF / SPD), its
+///   skills with per-skill levels, and its six equipment slots with the
+///   equipped item's rarity, level, main stat, substats, and set, plus
+///   the active set bonuses (all read live from the equipment inventory);
 /// - functional progression controls for the selected hero: LEVEL UP
 ///   (placeholder gold-to-XP exchange), ASCEND, AWAKEN (spends Awakening
 ///   Materials), and per-skill UPGRADE buttons - each button reflects the
@@ -35,8 +37,10 @@ using UnityEngine.UI;
 ///   HeroInstance progression APIs, never fake interactions;
 /// - a clearly marked DEBUG tool column (development only): add XP, add
 ///   gold, +1 constellation (the exact path a duplicate summon takes),
-///   add Awakening Materials / Hero Tokens, and reset the selected hero's
-///   progression.
+///   add Awakening Materials / Hero Tokens, reset the selected hero's
+///   progression, and equipment tools (add an item, auto-equip the best
+///   items, upgrade gear, unequip all, wipe the inventory) - the minimum
+///   interface needed to exercise the equipment system.
 ///
 /// This is a pure view layer: every value is read from the actual
 /// <see cref="HeroInstance"/> (progression and current stats) and its
@@ -129,6 +133,9 @@ public class HeroesScreen : MonoBehaviour
 
     /// <summary>Height of one skill row in the details panel.</summary>
     private const float SkillRowHeight = 64f;
+
+    /// <summary>Vertical step between equipment slot rows in the details panel.</summary>
+    private const float EquipmentRowStep = 34f;
 
     /// <summary>The screen draws above the main menu (10) and battle HUD (0).</summary>
     private const int ScreenSortingOrder = 20;
@@ -264,6 +271,18 @@ public class HeroesScreen : MonoBehaviour
     /// <summary>Constellation detail line: the next rank's planned effect (placeholder text).</summary>
     private Text constellationDetail;
 
+    /// <summary>Details equipment section header ("EQUIPMENT  (N owned)").</summary>
+    private Text detailEquipmentHeader;
+
+    /// <summary>One primary line per equipment slot (in <see cref="EquipmentSlot"/> order).</summary>
+    private readonly Text[] detailSlotTexts = new Text[6];
+
+    /// <summary>One substat line per equipment slot, below <see cref="detailSlotTexts"/>.</summary>
+    private readonly Text[] detailSlotSubstatTexts = new Text[6];
+
+    /// <summary>Active set-bonus line below the equipment slot list.</summary>
+    private Text detailSetBonusText;
+
     /// <summary>Right-hand action column root (LEVEL UP / ASCEND / AWAKEN, status, DEBUG tools); hidden without a selection.</summary>
     private GameObject controlsRoot;
 
@@ -287,6 +306,9 @@ public class HeroesScreen : MonoBehaviour
 
     /// <summary>One-line feedback for the latest progression action.</summary>
     private Text statusText;
+
+    /// <summary>Cycles the + EQUIPMENT debug tool through the catalog (development-tool state only).</summary>
+    private int debugEquipmentTemplateIndex;
 
     /// <summary>The details elements that only make sense with a selected hero.</summary>
     private readonly List<Graphic> detailHeroElements = new List<Graphic>();
@@ -574,6 +596,114 @@ public class HeroesScreen : MonoBehaviour
 
         RefreshActionButtons(hero);
         RebuildSkillRows(hero);
+        RefreshEquipmentSection(hero);
+    }
+
+    /// <summary>
+    /// Fills the equipment section from the real inventory and the hero's
+    /// loadout: the owned-item count, one row per slot (item name, rarity,
+    /// level, main stat, set, lock - or an empty marker), the item's rolled
+    /// substats, and the active set bonuses - all display-only, computed by
+    /// the equipment system itself.
+    /// </summary>
+    private void RefreshEquipmentSection(HeroInstance hero)
+    {
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+
+        detailEquipmentHeader.text = "EQUIPMENT  ("
+            + (inventory != null ? inventory.Count : 0) + " owned)";
+
+        for (int slot = 0; slot < 6; slot++)
+        {
+            EquipmentInstance item = hero != null ? hero.GetEquippedItem((EquipmentSlot)slot) : null;
+            if (item == null)
+            {
+                detailSlotTexts[slot].text = SlotLabel((EquipmentSlot)slot) + "   - empty -";
+                detailSlotTexts[slot].color = DimTextColor;
+                detailSlotSubstatTexts[slot].text = string.Empty;
+                continue;
+            }
+
+            string itemName = item.data != null && !string.IsNullOrEmpty(item.data.equipmentName)
+                ? item.data.equipmentName
+                : "Unknown item";
+            string set = string.IsNullOrEmpty(item.setId) ? string.Empty : "  [" + SetDisplayName(item.setId) + "]";
+            string locked = item.locked ? "  [LOCKED]" : string.Empty;
+            detailSlotTexts[slot].text = SlotLabel((EquipmentSlot)slot) + "   " + itemName
+                + "  (" + RarityStyleFor(item.rarity).Label + ")  Lv " + item.level
+                + "   " + EquipmentStatLabel(item.mainStatType) + " +" + item.mainStatValue
+                + set + locked;
+            detailSlotTexts[slot].color = Color.white;
+
+            detailSlotSubstatTexts[slot].text = SubstatSummary(item);
+        }
+
+        string setBonuses = EquipmentStats.DescribeSetBonuses(hero);
+        detailSetBonusText.text = string.IsNullOrEmpty(setBonuses)
+            ? string.Empty
+            : "SET BONUSES: " + setBonuses;
+    }
+
+    /// <summary>Uppercase display label for an equipment slot (UI copy only - the slot enum itself is the data).</summary>
+    private static string SlotLabel(EquipmentSlot slot)
+    {
+        switch (slot)
+        {
+            case EquipmentSlot.Weapon: return "WEAPON";
+            case EquipmentSlot.Helmet: return "HELMET";
+            case EquipmentSlot.Armor: return "ARMOR";
+            case EquipmentSlot.Gloves: return "GLOVES";
+            case EquipmentSlot.Boots: return "BOOTS";
+            case EquipmentSlot.Accessory: return "ACCESSORY";
+            default: return slot.ToString().ToUpperInvariant();
+        }
+    }
+
+    /// <summary>Short label for an equipment stat type (UI copy only - the enum itself is the data).</summary>
+    private static string EquipmentStatLabel(EquipmentStatType statType)
+    {
+        switch (statType)
+        {
+            case EquipmentStatType.HP: return "HP";
+            case EquipmentStatType.ATK: return "ATK";
+            case EquipmentStatType.DEF: return "DEF";
+            case EquipmentStatType.SPD: return "SPD";
+            default: return statType.ToString().ToUpperInvariant();
+        }
+    }
+
+    /// <summary>The set's display name, or the raw id for unknown sets (data-driven, never hardcoded).</summary>
+    private static string SetDisplayName(string setId)
+    {
+        EquipmentSetDefinition set = EquipmentProgression.FindSet(setId);
+        return set != null && !string.IsNullOrEmpty(set.SetName) ? set.SetName : setId;
+    }
+
+    /// <summary>One dimmed line with the item's rolled substats, e.g. "ATK +9 / DEF +5".</summary>
+    private static string SubstatSummary(EquipmentInstance item)
+    {
+        if (item == null || item.substats == null || item.substats.Count == 0)
+        {
+            return "no substats";
+        }
+
+        System.Text.StringBuilder text = new System.Text.StringBuilder();
+        foreach (EquipmentSubstat substat in item.substats)
+        {
+            if (substat == null)
+            {
+                continue;
+            }
+
+            if (text.Length > 0)
+            {
+                text.Append(" / ");
+            }
+
+            text.Append(EquipmentStatLabel(substat.statType)).Append(" +").Append(substat.value);
+        }
+
+        return text.Length > 0 ? text.ToString() : "no substats";
     }
 
     /// <summary>
@@ -916,6 +1046,171 @@ public class HeroesScreen : MonoBehaviour
         AfterProgressionAction();
     }
 
+    // ----- DEBUG equipment tools (development only) -----
+
+    /// <summary>
+    /// DEBUG: creates one new item in the inventory, cycling through the
+    /// equipment catalog template by template (development tool; the real
+    /// acquisition flow will be drops/summons/crafting later).
+    /// </summary>
+    private void OnDebugAddEquipment()
+    {
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+        IReadOnlyList<EquipmentData> catalog = runner != null ? runner.EquipmentCatalog : null;
+        if (inventory == null || catalog == null || catalog.Count == 0)
+        {
+            return;
+        }
+
+        EquipmentData template = catalog[debugEquipmentTemplateIndex % catalog.Count];
+        debugEquipmentTemplateIndex++;
+
+        EquipmentInstance item = inventory.CreateEquipment(template);
+        if (item == null)
+        {
+            SetStatus("DEBUG: could not create equipment.");
+            return;
+        }
+
+        SetStatus("DEBUG: added " + (template != null ? template.equipmentName : "item")
+            + " (" + RarityStyleFor(item.rarity).Label + " " + SlotLabel(item.slot) + ", " + item.instanceId + ").");
+        AfterProgressionAction();
+    }
+
+    /// <summary>
+    /// DEBUG: equips the best available item per slot on the selected hero
+    /// (highest main stat, ties by level). Only takes items from the
+    /// unequipped pool - never steals from other heroes (development tool;
+    /// real equipment management UI comes later).
+    /// </summary>
+    private void OnDebugEquipBest()
+    {
+        HeroInstance hero = selectedHero;
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+        if (hero == null || inventory == null)
+        {
+            return;
+        }
+
+        string heroId = hero.data != null ? hero.data.HeroId : string.Empty;
+        int equipped = 0;
+        for (int slot = 0; slot < 6; slot++)
+        {
+            EquipmentInstance best = null;
+            foreach (EquipmentInstance item in inventory.Items)
+            {
+                if (item == null || item.slot != (EquipmentSlot)slot)
+                {
+                    continue;
+                }
+
+                // Only items this hero could take without stealing: in the
+                // unequipped pool, or already on this hero.
+                string owner = inventory.EquippedByHeroId(item.instanceId);
+                if (owner != null && owner != heroId)
+                {
+                    continue;
+                }
+
+                if (best == null
+                    || item.mainStatValue > best.mainStatValue
+                    || (item.mainStatValue == best.mainStatValue && item.level > best.level))
+                {
+                    best = item;
+                }
+            }
+
+            if (best != null && inventory.Equip(hero, best) == EquipResult.Equipped)
+            {
+                equipped++;
+            }
+        }
+
+        SetStatus(equipped > 0
+            ? "DEBUG: equipped " + equipped + " best item(s) on " + hero.displayName + "."
+            : "DEBUG: no unequipped items available for " + hero.displayName + ".");
+        AfterProgressionAction();
+    }
+
+    /// <summary>
+    /// DEBUG: upgrades the selected hero's first upgradable equipped item
+    /// through the real gold upgrade path (development tool; the real
+    /// equipment upgrade UI comes later).
+    /// </summary>
+    private void OnDebugUpgradeGear()
+    {
+        HeroInstance hero = selectedHero;
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+        PlayerWallet wallet = runner != null ? runner.Wallet : null;
+        if (hero == null || inventory == null || wallet == null)
+        {
+            return;
+        }
+
+        for (int slot = 0; slot < 6; slot++)
+        {
+            EquipmentInstance item = hero.GetEquippedItem((EquipmentSlot)slot);
+            if (item == null || !item.CanUpgrade(wallet, out _))
+            {
+                continue;
+            }
+
+            string name = item.data != null ? item.data.equipmentName : item.instanceId;
+            if (!item.Upgrade(wallet))
+            {
+                SetStatus("DEBUG: upgrade of " + name + " failed.");
+                return;
+            }
+
+            SetStatus("DEBUG: " + name + " upgraded to Lv " + item.level
+                + " (" + EquipmentStatLabel(item.mainStatType) + " +" + item.mainStatValue + ").");
+            AfterProgressionAction();
+            return;
+        }
+
+        SetStatus("DEBUG: no equipped item can upgrade (missing template, max level, or not enough gold).");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: unequips every item from the selected hero (items stay owned; development tool).</summary>
+    private void OnDebugUnequipAll()
+    {
+        HeroInstance hero = selectedHero;
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+        if (hero == null || inventory == null)
+        {
+            return;
+        }
+
+        int unequipped = 0;
+        for (int slot = 0; slot < 6; slot++)
+        {
+            if (inventory.Unequip(hero, (EquipmentSlot)slot))
+            {
+                unequipped++;
+            }
+        }
+
+        SetStatus(unequipped > 0
+            ? "DEBUG: unequipped " + unequipped + " item(s) from " + hero.displayName + "."
+            : "DEBUG: " + hero.displayName + " has nothing equipped.");
+        AfterProgressionAction();
+    }
+
+    /// <summary>DEBUG: wipes the whole equipment inventory (unequips every hero first; development tool).</summary>
+    private void OnDebugResetGear()
+    {
+        EquipmentInventory inventory = runner != null ? runner.EquipmentInventory : null;
+        if (inventory == null)
+        {
+            return;
+        }
+
+        inventory.ResetAll();
+        SetStatus("DEBUG: equipment inventory wiped.");
+        AfterProgressionAction();
+    }
+
     /// <summary>Shows one line of feedback for the latest action.</summary>
     private void SetStatus(string message)
     {
@@ -1148,6 +1443,33 @@ public class HeroesScreen : MonoBehaviour
         skills.sizeDelta = new Vector2(SkillRowWidth, 0f);
         skillsRoot = skills;
 
+        // ---- Middle column, below the skills: the equipment loadout ----
+        detailEquipmentHeader = CreateText(panel, "EquipmentHeader", "EQUIPMENT",
+            SectionHeaderFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -620f), new Vector2(SkillRowWidth, 34f));
+        detailEquipmentHeader.color = GoldAccent;
+
+        // One two-line row per slot (fixed 6 slots, EquipmentSlot order):
+        // the item line and a dimmed substat line, filled in RefreshDetails.
+        for (int slot = 0; slot < 6; slot++)
+        {
+            float rowY = -654f - slot * EquipmentRowStep;
+            detailSlotTexts[slot] = CreateText(panel, "Slot" + slot, string.Empty,
+                DetailSkillMetaFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+                TopLeft, TopLeft, new Vector2(300f, rowY), new Vector2(SkillRowWidth, 20f));
+            detailSlotSubstatTexts[slot] = CreateText(panel, "SlotSubstats" + slot, string.Empty,
+                DetailSkillMetaFontSize - 3, FontStyle.Normal, TextAnchor.MiddleLeft,
+                TopLeft, TopLeft, new Vector2(318f, rowY - 15f), new Vector2(SkillRowWidth - 18f, 16f));
+            detailSlotSubstatTexts[slot].color = DimTextColor;
+        }
+
+        detailSetBonusText = CreateText(panel, "SetBonuses", string.Empty,
+            DetailSkillMetaFontSize, FontStyle.Bold, TextAnchor.MiddleLeft,
+            TopLeft, TopLeft, new Vector2(300f, -858f), new Vector2(SkillRowWidth, 40f));
+        detailSetBonusText.color = GoldAccent;
+        detailSetBonusText.horizontalOverflow = HorizontalWrapMode.Wrap;
+        detailSetBonusText.verticalOverflow = VerticalWrapMode.Overflow;
+
         // ---- Right column: action buttons, status, DEBUG tools ----
         RectTransform controls = CreateRect(panel, "ProgressionControls");
         controls.anchorMin = TopLeft;
@@ -1179,10 +1501,15 @@ public class HeroesScreen : MonoBehaviour
         BuildDebugButton(controls, "DebugAwakenMats", "+50 AWAK MATS", 174f, -420f, OnDebugAddAwakeningMaterials);
         BuildDebugButton(controls, "DebugTokens", "+10 TOKENS", 0f, -474f, OnDebugAddTokens);
         BuildDebugButton(controls, "DebugReset", "RESET HERO", 174f, -474f, OnDebugResetHero);
+        BuildDebugButton(controls, "DebugAddEquipment", "+ EQUIPMENT", 0f, -582f, OnDebugAddEquipment);
+        BuildDebugButton(controls, "DebugEquipBest", "EQUIP BEST", 174f, -582f, OnDebugEquipBest);
+        BuildDebugButton(controls, "DebugUpgradeGear", "UP GEAR", 0f, -636f, OnDebugUpgradeGear);
+        BuildDebugButton(controls, "DebugUnequipAll", "UNEQUIP ALL", 174f, -636f, OnDebugUnequipAll);
+        BuildDebugButton(controls, "DebugResetGear", "RESET GEAR", 0f, -690f, OnDebugResetGear);
 
         Text debugNote = CreateText(controls, "DebugNote", "Development tools, not player mechanics.",
             DebugButtonFontSize, FontStyle.Normal, TextAnchor.MiddleLeft,
-            TopLeft, TopLeft, new Vector2(4f, -528f), new Vector2(ActionButtonWidth, 34f));
+            TopLeft, TopLeft, new Vector2(4f, -744f), new Vector2(ActionButtonWidth, 34f));
         debugNote.color = DimTextColor;
         debugNote.horizontalOverflow = HorizontalWrapMode.Wrap;
         debugNote.verticalOverflow = VerticalWrapMode.Overflow;
@@ -1202,7 +1529,10 @@ public class HeroesScreen : MonoBehaviour
             detailRarityBack, detailRarityText, detailRoleText, detailLevelText, detailXpText,
             detailStatHp, detailStatAtk, detailStatDef, detailStatSpd, detailSkillsHeader,
             ascensionLine, awakeningLine, constellationLine, constellationDetail,
+            detailEquipmentHeader, detailSetBonusText,
         });
+        detailHeroElements.AddRange(detailSlotTexts);
+        detailHeroElements.AddRange(detailSlotSubstatTexts);
     }
 
     /// <summary>Builds one full-width action button (raycastable dark panel + gold label).</summary>

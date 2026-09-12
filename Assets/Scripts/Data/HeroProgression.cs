@@ -25,10 +25,11 @@ public static class HeroProgression
     /// <summary>
     /// Current save-file version. Version 2 replaced the Hero Souls counter
     /// with the C0-C6 constellation and added awakening materials + Hero
-    /// Tokens; version-1 files are migrated on load (see
-    /// <see cref="PlayerSaveSystem"/>), future versions are rejected safely.
+    /// Tokens; version 3 added the equipment inventory and equip-state data
+    /// (older files load with an empty inventory - see
+    /// <see cref="PlayerSaveSystem"/>); future versions are rejected safely.
     /// </summary>
-    public const int CurrentSaveVersion = 2;
+    public const int CurrentSaveVersion = 3;
 
     // ---------------------------------------------------------------------
     // Ascension (raises the level cap and grants stat bonuses)
