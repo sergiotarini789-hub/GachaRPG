@@ -21,9 +21,10 @@ using UnityEngine.UI;
 /// - a compact battle log strip at the top-center showing the
 ///   <see cref="BattleTestRunner.MaxLogEntries"/> most recent events;
 /// - a bottom action bar: the currently acting hero, a basic-attack slot,
-///   three skill slots fed from the acting hero's kit, an AUTO placeholder
-///   toggle, and a real SPEED x1/x2/x3 toggle that cycles the runner's
-///   battle speed (turn pacing only - never combat math);
+///   three skill slots fed from the acting hero's kit, a real AUTO/MANUAL
+///   toggle (AUTO OFF parks player-team turns here until the player picks
+///   an action and target), and a real SPEED x1/x2/x3 toggle that cycles
+///   the runner's battle speed (turn pacing only - never combat math);
 /// - a centered result banner, hidden until the battle ends: "Victory!" when
 ///   team 1 wins, "Defeat!" when team 2 wins, "Draw!" when nobody does;
 /// - a PAUSE button beside the battle log: it freezes the battle (turn
@@ -207,6 +208,9 @@ public class BattleHud : MonoBehaviour
     /// <summary>Font size of the AUTO/SPEED toggle buttons.</summary>
     private const int ToggleFontSize = 19;
 
+    /// <summary>Font size of the manual-turn hint above the action bar.</summary>
+    private const int ManualHintFontSize = 19;
+
     /// <summary>Font size of the result banner.</summary>
     private const int BannerFontSize = 60;
 
@@ -364,14 +368,29 @@ public class BattleHud : MonoBehaviour
     /// <summary>Basic-attack square view (always shown, engine's fallback move).</summary>
     private ActionSlotView attackSlot;
 
-    /// <summary>AUTO toggle label (visual placeholder only).</summary>
+    /// <summary>AUTO toggle label; always shows the active mode (AUTO ON / AUTO OFF).</summary>
     private Text autoLabel;
 
-    /// <summary>AUTO toggle background (visual placeholder only).</summary>
+    /// <summary>AUTO toggle background; lit while AUTO is on.</summary>
     private Image autoImage;
 
-    /// <summary>Whether the AUTO placeholder toggle is switched on (visual state only).</summary>
-    private bool autoOn;
+    /// <summary>Last AUTO state applied to the toggle visuals; resyncs from the runner so a new battle resets to AUTO ON.</summary>
+    private bool cachedAutoOn = true;
+
+    /// <summary>The action square armed by the player's click (awaiting an enemy target), or null. Pure UI state.</summary>
+    private ActionSlotView armedSlot;
+
+    /// <summary>The skill armed for targeting (null = the armed basic attack).</summary>
+    private SkillData armedSkill;
+
+    /// <summary>The manual actor the hint/arm state was last drawn for; a change clears the armed action.</summary>
+    private HeroInstance drawnManualActor;
+
+    /// <summary>Hint line above the action bar shown while a manual turn waits for the player.</summary>
+    private Text manualHint;
+
+    /// <summary>Last hint text drawn, so steady frames skip string work.</summary>
+    private string cachedManualHint;
 
     /// <summary>SPEED toggle label; always shows the active multiplier (SPEED x1/x2/x3).</summary>
     private Text speedLabel;
@@ -423,8 +442,9 @@ public class BattleHud : MonoBehaviour
 
     /// <summary>
     /// Sets the hero presented as the selected target (red frame + tag), or
-    /// null to clear. UI state only - targeting has no combat effect yet.
-    /// Clicking an enemy slot calls this; a future input system will too.
+    /// null to clear. Also the visual feedback when a manual action is
+    /// aimed at an enemy; combat itself only ever sees the target the
+    /// runner hands to the engine.
     /// </summary>
     public void SetSelectedTarget(HeroInstance hero)
     {
@@ -521,6 +541,8 @@ public class BattleHud : MonoBehaviour
         RefreshBanner();
         RefreshPauseButton();
         RefreshSpeedToggle();
+        RefreshAutoToggle();
+        RefreshManualHint();
         RefreshActionBar();
     }
 
@@ -832,10 +854,11 @@ public class BattleHud : MonoBehaviour
     /// <summary>
     /// Builds the bottom action bar: the acting hero's summary on the left,
     /// the basic-attack square plus three skill squares in the middle, and
-    /// an AUTO placeholder toggle plus the real SPEED x1/x2/x3 control on
-    /// the right. Nothing here drives combat math; skill squares only read
-    /// the acting hero's kit and readiness, and SPEED only scales the
-    /// runner's turn pacing.
+    /// the real AUTO/MANUAL and SPEED x1/x2/x3 controls on the right.
+    /// Nothing here drives combat math: skill squares read the acting
+    /// hero's kit and readiness, SPEED only scales the runner's turn
+    /// pacing, and manual actions are submitted to the runner, which runs
+    /// them through the unchanged combat engine.
     /// </summary>
     private void BuildActionBar(RectTransform root)
     {
@@ -886,18 +909,30 @@ public class BattleHud : MonoBehaviour
             TopLeft, TopLeft, new Vector2(126f, -78f), new Vector2(96f, 26f));
 
         // ---- Action squares (center): basic attack + three skill slots ----
-        attackSlot = new ActionSlotView(this, barRect, "AttackSlot", -229f);
+        attackSlot = new ActionSlotView(this, barRect, "AttackSlot", -229f, OnAttackClicked);
         attackSlot.SetContent("ATK", "ATTACK", ready: true);
 
         skillSlots = new ActionSlotView[3];
         for (int i = 0; i < skillSlots.Length; i++)
         {
-            skillSlots[i] = new ActionSlotView(this, barRect, "SkillSlot" + (i + 1), -229f + ActionSlotSize + 14f + i * (ActionSlotSize + 14f));
+            // Local copy: the click closure must capture this slot's index,
+            // not the shared loop variable.
+            int slotIndex = i;
+            skillSlots[i] = new ActionSlotView(this, barRect, "SkillSlot" + (i + 1), -229f + ActionSlotSize + 14f + i * (ActionSlotSize + 14f), () => OnSkillClicked(slotIndex));
         }
 
-        // ---- Toggles (right): AUTO placeholder + the real SPEED control ----
-        BuildToggle(barRect, "AutoToggle", out autoImage, out autoLabel, -84f, "AUTO", OnAutoClicked);
+        // ---- Toggles (right): the real AUTO/MANUAL and SPEED controls ----
+        BuildToggle(barRect, "AutoToggle", out autoImage, out autoLabel, -84f, "AUTO ON", OnAutoClicked);
         BuildToggle(barRect, "SpeedToggle", out speedImage, out speedLabel, -16f, "SPEED x1", OnSpeedClicked);
+        ApplyAutoVisual(true); // battles start in AUTO; correct lit look before the first Update
+
+        // Manual-turn hint: one line above the bar telling the player what
+        // the battle is waiting for; empty (invisible) outside manual turns.
+        manualHint = CreateText(root, "ManualHint", string.Empty,
+            ManualHintFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
+            new Vector2(0.5f, 0f), new Vector2(0.5f, 0f),
+            new Vector2(0f, ScreenMargin + ActionBarHeight + 10f), new Vector2(680f, 26f));
+        manualHint.color = PlayerAccent;
     }
 
     /// <summary>Creates one toggle button (rounded panel + bold label) wired to its click handler.</summary>
@@ -925,13 +960,40 @@ public class BattleHud : MonoBehaviour
         Stretch(label.rectTransform);
     }
 
-    /// <summary>AUTO placeholder click: flips the visual toggle only; auto-battle is a future system.</summary>
+    /// <summary>
+    /// AUTO click: switches the runner between AUTO (the engine's AI acts
+    /// for everyone) and MANUAL (player-team turns wait for the player's
+    /// action). The runner stays the single source of truth; this only
+    /// flips it and applies the visuals.
+    /// </summary>
     private void OnAutoClicked()
     {
-        autoOn = !autoOn;
-        autoLabel.text = autoOn ? "AUTO ON" : "AUTO";
-        autoLabel.color = autoOn ? PlayerAccent : Color.white;
-        autoImage.color = autoOn ? ActionSlotColor : ActionSlotDimColor;
+        if (runner == null)
+        {
+            return;
+        }
+
+        runner.SetAutoBattle(!runner.AutoBattle);
+        ApplyAutoVisual(runner.AutoBattle);
+    }
+
+    /// <summary>Applies the AUTO state to the toggle visuals: the label always shows AUTO ON / AUTO OFF, lit while on.</summary>
+    private void ApplyAutoVisual(bool on)
+    {
+        cachedAutoOn = on;
+        autoLabel.text = on ? "AUTO ON" : "AUTO OFF";
+        autoLabel.color = on ? PlayerAccent : Color.white;
+        autoImage.color = on ? ActionSlotColor : ActionSlotDimColor;
+    }
+
+    /// <summary>Keeps the toggle in sync with the runner: a fresh battle resets to AUTO ON, flipping the label back.</summary>
+    private void RefreshAutoToggle()
+    {
+        bool on = runner != null && runner.AutoBattle;
+        if (on != cachedAutoOn)
+        {
+            ApplyAutoVisual(on);
+        }
     }
 
     /// <summary>
@@ -967,6 +1029,126 @@ public class BattleHud : MonoBehaviour
         if (mode != cachedSpeedMode)
         {
             ApplySpeedVisual(mode);
+        }
+    }
+
+    /// <summary>
+    /// ATTACK square click during a manual turn: arms the basic attack,
+    /// which fires on the next enemy-slot click. Ignored outside manual
+    /// turns (AUTO ON, or an enemy hero acting).
+    /// </summary>
+    private void OnAttackClicked()
+    {
+        ArmAction(attackSlot, null);
+    }
+
+    /// <summary>
+    /// Skill square click during a manual turn. Locked squares and
+    /// cooling-down skills stay unselectable; enemy-targeted skills (and
+    /// the basic attack) arm and wait for an enemy-slot click, while
+    /// Self/Ally skills submit immediately and let the engine resolve
+    /// their target by its existing rule.
+    /// </summary>
+    private void OnSkillClicked(int index)
+    {
+        if (index < 0 || index >= skillSlots.Length)
+        {
+            return;
+        }
+
+        SkillData skill = skillSlots[index].BoundSkill;
+        HeroInstance actor = runner != null ? runner.ManualActor : null;
+        if (skill == null || actor == null)
+        {
+            return; // locked square, or not the player's decision to make
+        }
+
+        if (!actor.skills.Contains(skill) || !actor.IsSkillReady(skill))
+        {
+            return; // not this hero's skill, or still cooling down
+        }
+
+        if (skill.target == SkillTarget.Enemy)
+        {
+            ArmAction(skillSlots[index], skill);
+        }
+        else
+        {
+            ClearArmedAction();
+            runner.SubmitManualAction(skill, null);
+        }
+    }
+
+    /// <summary>
+    /// Arms an enemy-targeted action (a null skill = the basic attack):
+    /// highlights the square and waits for an enemy-slot click. Clicking
+    /// the armed square again disarms it.
+    /// </summary>
+    private void ArmAction(ActionSlotView slot, SkillData skill)
+    {
+        if (runner == null || runner.ManualActor == null)
+        {
+            return;
+        }
+
+        if (ReferenceEquals(armedSlot, slot))
+        {
+            ClearArmedAction();
+            return;
+        }
+
+        ClearArmedAction();
+        armedSlot = slot;
+        armedSkill = skill;
+        slot.SetArmed(true);
+    }
+
+    /// <summary>Disarms the pending targeting selection (visual only; the runner is untouched).</summary>
+    private void ClearArmedAction()
+    {
+        if (armedSlot != null)
+        {
+            armedSlot.SetArmed(false);
+        }
+
+        armedSlot = null;
+        armedSkill = null;
+    }
+
+    /// <summary>
+    /// Keeps the manual-turn hint and arm state in sync: a new manual actor
+    /// (or AUTO taking over) clears the armed action, and the hint tells
+    /// the player whether to pick an action or a target.
+    /// </summary>
+    private void RefreshManualHint()
+    {
+        HeroInstance actor = runner != null ? runner.ManualActor : null;
+        if (!ReferenceEquals(drawnManualActor, actor))
+        {
+            drawnManualActor = actor;
+            ClearArmedAction();
+        }
+
+        string hint;
+        if (actor == null)
+        {
+            hint = string.Empty;
+        }
+        else if (armedSlot == null)
+        {
+            hint = "Your turn - select an action for " + actor.displayName;
+        }
+        else
+        {
+            hint = armedSkill != null
+                ? "Select a target for " + armedSkill.skillName
+                : "Select a target for the basic attack";
+        }
+
+        if (hint != cachedManualHint)
+        {
+            cachedManualHint = hint;
+            manualHint.text = hint;
         }
     }
 
@@ -1666,7 +1848,8 @@ public class BattleHud : MonoBehaviour
             targetTag.SetActive(false);
 
             // Enemy slots are clickable: clicking marks (or unmarks) the hero
-            // as the selected target. Presentation only - no combat effect.
+            // as the selected target, and fires an armed manual action at it
+            // (submitted to the engine through the runner).
             if (rightSide)
             {
                 back.raycastTarget = true;
@@ -1733,13 +1916,31 @@ public class BattleHud : MonoBehaviour
     }
 
     /// <summary>
-    /// Click handler for enemy slots: marks the hero as the selected target,
-    /// or clears the mark when the same slot is clicked again. Pure UI state.
+    /// Click handler for enemy slots. In a manual turn with an action armed,
+    /// the click aims that action at this hero and submits it to the runner
+    /// (the unchanged combat engine executes it); otherwise it marks the
+    /// hero as the selected target, or clears the mark when the same slot
+    /// is clicked again.
     /// </summary>
     private void OnEnemySlotClicked(HeroInstance hero)
     {
         if (hero == null || !hero.isAlive)
         {
+            return;
+        }
+
+        if (armedSlot != null)
+        {
+            // Fire the armed action at this hero: red target frame for
+            // feedback, then hand skill + target to the runner.
+            SkillData skill = armedSkill;
+            ClearArmedAction();
+            SetSelectedTarget(hero);
+            if (runner != null)
+            {
+                runner.SubmitManualAction(skill, hero);
+            }
+
             return;
         }
 
@@ -1750,10 +1951,14 @@ public class BattleHud : MonoBehaviour
     /// One square in the action bar's middle cluster: the basic-attack
     /// square or one of the hero's skill squares. Shows a short glyph, a
     /// label underneath, and a ready/cooldown look read live from the acting
-    /// hero (read-only). Placeholder visuals only - clicking does nothing.
+    /// hero. Clickable during manual turns: the handler decides whether a
+    /// click does anything (locked and cooling-down squares stay inert).
     /// </summary>
     private sealed class ActionSlotView
     {
+        /// <summary>Whether the player armed this square (manual targeting); lights the border like the acting-hero frame.</summary>
+        private bool armed;
+
         private readonly Image back;
 
         private readonly Image border;
@@ -1771,7 +1976,7 @@ public class BattleHud : MonoBehaviour
 
         private bool lastReady;
 
-        public ActionSlotView(BattleHud hud, RectTransform bar, string name, float x)
+        public ActionSlotView(BattleHud hud, RectTransform bar, string name, float x, UnityEngine.Events.UnityAction onClick)
         {
             RectTransform rect = CreateRect(bar, name);
             rect.anchorMin = new Vector2(0.5f, 1f);
@@ -1784,6 +1989,14 @@ public class BattleHud : MonoBehaviour
                 TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
             border = hud.CreateSlicedImage(rect, "Border", ActionSlotReadyColor, hud.frameSprite,
                 TopLeft, TopLeft, Vector2.zero, rect.sizeDelta);
+
+            // Clickable square: the backdrop is the raycast target and a
+            // Button routes to the HUD's handler (the handler itself guards
+            // manual-turn state and readiness).
+            back.raycastTarget = true;
+            Button slotButton = rect.gameObject.AddComponent<Button>();
+            slotButton.targetGraphic = back;
+            slotButton.onClick.AddListener(onClick);
 
             glyph = hud.CreateText(rect, "Glyph", string.Empty,
                 ActionSlotFontSize, FontStyle.Bold, TextAnchor.MiddleCenter,
@@ -1819,12 +2032,27 @@ public class BattleHud : MonoBehaviour
             ApplyReadiness(ready);
         }
 
+        /// <summary>The skill this square is bound to, or null (basic attack / locked).</summary>
+        public SkillData BoundSkill => boundSkill;
+
         /// <summary>Binds the square to one of the acting hero's skills.</summary>
         public void BindSkill(SkillData skill)
         {
             boundSkill = skill;
             glyph.text = string.IsNullOrEmpty(skill.skillName) ? "?" : skill.skillName.Substring(0, 1);
             ApplyLabel(skill.skillName);
+        }
+
+        /// <summary>Lights or clears the armed (awaiting-target) look.</summary>
+        public void SetArmed(bool value)
+        {
+            if (armed == value)
+            {
+                return;
+            }
+
+            armed = value;
+            ApplyBorder();
         }
 
         /// <summary>Marks the square as locked (no skill in this position yet).</summary>
@@ -1865,9 +2093,17 @@ public class BattleHud : MonoBehaviour
 
             lastReady = ready;
             back.color = ready ? ActionSlotColor : ActionSlotDimColor;
-            border.color = ready ? ActionSlotReadyColor : new Color(1f, 1f, 1f, 0.18f);
+            ApplyBorder();
             glyph.color = ready ? Color.white : new Color(1f, 1f, 1f, 0.45f);
             cooldownTag.transform.parent.gameObject.SetActive(!ready && boundSkill != null);
+        }
+
+        /// <summary>Border color: gold when armed, else the ready/cooldown look.</summary>
+        private void ApplyBorder()
+        {
+            border.color = armed
+                ? ActiveFrameColor
+                : lastReady ? ActionSlotReadyColor : new Color(1f, 1f, 1f, 0.18f);
         }
     }
 }

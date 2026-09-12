@@ -18,7 +18,10 @@ using System.Linq;
 /// fails safely: no effect, no cooldown consumed, turn spent). Basic
 /// attacks always hit the first living enemy. Victory: a team wins when
 /// every enemy hero is dead; a safety turn cap ends endless battles as a
-/// draw.
+/// draw. The PerformTurn overload injects a player-chosen action (manual
+/// mode): it is validated against these same rules - invalid choices fall
+/// back to the automatic behavior - and runs through the identical
+/// pipeline, so there is only ever one combat engine.
 /// </summary>
 public class TeamBattle
 {
@@ -78,13 +81,41 @@ public class TeamBattle
     }
 
     /// <summary>
-    /// Resolves the acting hero's turn: cooldowns tick, then the hero uses
-    /// its first ready skill - target resolved from the skill's SkillTarget -
-    /// or falls back to a basic attack on the first living enemy. Returns a
-    /// human readable battle-event line for UI logs, or null when nothing
-    /// happened.
+    /// Resolves the acting hero's turn automatically: cooldowns tick, then
+    /// the hero uses its first ready skill - target resolved from the
+    /// skill's SkillTarget - or falls back to a basic attack on the first
+    /// living enemy. Returns a human readable battle-event line for UI
+    /// logs, or null when nothing happened.
     /// </summary>
     public string PerformTurn(HeroInstance actor)
+    {
+        return ResolveTurn(actor, null, null, playerChosen: false);
+    }
+
+    /// <summary>
+    /// Resolves the acting hero's turn with the player's chosen action:
+    /// the chosen skill (null = basic attack) and target are validated and
+    /// then run through the exact same pipeline as the automatic turn -
+    /// damage, healing, cooldowns, turn counting, and victory checks are
+    /// shared, never duplicated. An invalid choice (skill not owned or
+    /// cooling down, target dead or on the wrong side) safely falls back
+    /// to the automatic behavior, and a null target lets the engine
+    /// resolve Self/Ally skills itself. Returns the same battle-event
+    /// line format as <see cref="PerformTurn(HeroInstance)"/>.
+    /// </summary>
+    public string PerformTurn(HeroInstance actor, SkillData chosenSkill, HeroInstance chosenTarget)
+    {
+        return ResolveTurn(actor, chosenSkill, chosenTarget, playerChosen: true);
+    }
+
+    /// <summary>
+    /// The single turn pipeline both entry points share: guards, cooldown
+    /// tick, action choice (the player's when valid, otherwise the
+    /// automatic first-ready-skill / basic-attack rule), execution through
+    /// <see cref="CombatManager"/>, the battle-event message, turn
+    /// counting, and victory checks.
+    /// </summary>
+    private string ResolveTurn(HeroInstance actor, SkillData chosenSkill, HeroInstance chosenTarget, bool playerChosen)
     {
         if (BattleOver || actor == null || !actor.isAlive)
         {
@@ -104,59 +135,53 @@ public class TeamBattle
             return null;
         }
 
-        string message = null;
-        SkillData readySkill = null;
-        foreach (SkillData skill in actor.skills)
+        SkillData readySkill;
+        HeroInstance actionTarget;
+        if (playerChosen && IsValidChoice(actor, allies, enemies, chosenSkill, chosenTarget))
         {
-            if (actor.IsSkillReady(skill))
-            {
-                readySkill = skill;
-                break;
-            }
+            // Player's decision: the chosen skill (null = basic attack)
+            // aimed at the chosen target; skills submitted without an
+            // explicit target keep the engine's own target resolution.
+            readySkill = chosenSkill;
+            actionTarget = chosenSkill == null
+                ? chosenTarget
+                : chosenTarget ?? ResolveSkillTarget(actor, allies, chosenSkill, enemyTarget);
+        }
+        else
+        {
+            // Automatic decision: first ready skill, else basic attack.
+            readySkill = FirstReadySkill(actor);
+            actionTarget = readySkill == null ? enemyTarget : ResolveSkillTarget(actor, allies, readySkill, enemyTarget);
         }
 
+        if (readySkill != null && actionTarget == null)
+        {
+            // Fail safely: the skill fizzles - no effect, no cooldown
+            // consumed - but the turn is spent so the battle moves on.
+            turnsTaken++;
+            if (turnsTaken >= MaxTurns)
+            {
+                BattleOver = true;
+                Winner = null;
+            }
+
+            return $"{actor.displayName} finds no valid target for {readySkill.skillName}";
+        }
+
+        string message = null;
         if (readySkill != null)
         {
-            // Resolve the skill's intended target to a concrete hero.
-            HeroInstance skillTarget;
-            switch (readySkill.target)
-            {
-                case SkillTarget.Self:
-                    skillTarget = actor;
-                    break;
-                case SkillTarget.Ally:
-                    skillTarget = allies.LivingMembers().FirstOrDefault(member => !ReferenceEquals(member, actor));
-                    break;
-                default: // SkillTarget.Enemy
-                    skillTarget = enemyTarget;
-                    break;
-            }
-
-            if (skillTarget == null)
-            {
-                // Fail safely: the skill fizzles - no effect, no cooldown
-                // consumed - but the turn is spent so the battle moves on.
-                turnsTaken++;
-                if (turnsTaken >= MaxTurns)
-                {
-                    BattleOver = true;
-                    Winner = null;
-                }
-
-                return $"{actor.displayName} finds no valid target for {readySkill.skillName}";
-            }
-
-            int healthBefore = skillTarget.currentHealth;
-            CombatManager.PerformSkill(actor, skillTarget, readySkill);
+            int healthBefore = actionTarget.currentHealth;
+            CombatManager.PerformSkill(actor, actionTarget, readySkill);
 
             if (readySkill.type == SkillType.Heal)
             {
-                int healed = skillTarget.currentHealth - healthBefore;
-                message = ReferenceEquals(skillTarget, actor)
+                int healed = actionTarget.currentHealth - healthBefore;
+                message = ReferenceEquals(actionTarget, actor)
                     ? $"{actor.displayName} uses {readySkill.skillName} and recovers {healed} HP " +
-                      $"({skillTarget.currentHealth}/{skillTarget.maxHealth})"
-                    : $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} and recovers {healed} HP " +
-                      $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.maxHealth})";
+                      $"({actionTarget.currentHealth}/{actionTarget.maxHealth})"
+                    : $"{actor.displayName} uses {readySkill.skillName} on {actionTarget.displayName} and recovers {healed} HP " +
+                      $"({actionTarget.displayName} HP: {actionTarget.currentHealth}/{actionTarget.maxHealth})";
             }
             else if (readySkill.type == SkillType.Buff)
             {
@@ -165,19 +190,19 @@ public class TeamBattle
             else
             {
                 message =
-                    $"{actor.displayName} uses {readySkill.skillName} on {skillTarget.displayName} " +
-                    $"for {healthBefore - skillTarget.currentHealth} damage " +
-                    $"({skillTarget.displayName} HP: {skillTarget.currentHealth}/{skillTarget.maxHealth})";
+                    $"{actor.displayName} uses {readySkill.skillName} on {actionTarget.displayName} " +
+                    $"for {healthBefore - actionTarget.currentHealth} damage " +
+                    $"({actionTarget.displayName} HP: {actionTarget.currentHealth}/{actionTarget.maxHealth})";
             }
         }
         else
         {
-            int healthBefore = enemyTarget.currentHealth;
-            CombatManager.PerformAttack(actor, enemyTarget);
+            int healthBefore = actionTarget.currentHealth;
+            CombatManager.PerformAttack(actor, actionTarget);
             message =
-                $"{actor.displayName} attacks {enemyTarget.displayName} " +
-                $"for {healthBefore - enemyTarget.currentHealth} damage " +
-                $"({enemyTarget.displayName} HP: {enemyTarget.currentHealth}/{enemyTarget.maxHealth})";
+                $"{actor.displayName} attacks {actionTarget.displayName} " +
+                $"for {healthBefore - actionTarget.currentHealth} damage " +
+                $"({actionTarget.displayName} HP: {actionTarget.currentHealth}/{actionTarget.maxHealth})";
         }
 
         turnsTaken++;
@@ -197,6 +222,80 @@ public class TeamBattle
         }
 
         return message;
+    }
+
+    /// <summary>The acting hero's first ready skill, or null when only the basic attack is available.</summary>
+    private static SkillData FirstReadySkill(HeroInstance actor)
+    {
+        foreach (SkillData skill in actor.skills)
+        {
+            if (actor.IsSkillReady(skill))
+            {
+                return skill;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Resolves a skill's intended target to a concrete hero: Self is the
+    /// acting hero, Ally the first living ally other than the actor, Enemy
+    /// the given default enemy. Returns null when no valid target exists.
+    /// </summary>
+    private static HeroInstance ResolveSkillTarget(HeroInstance actor, Team allies, SkillData skill, HeroInstance defaultEnemy)
+    {
+        switch (skill.target)
+        {
+            case SkillTarget.Self:
+                return actor;
+            case SkillTarget.Ally:
+                return allies.LivingMembers().FirstOrDefault(member => !ReferenceEquals(member, actor));
+            default: // SkillTarget.Enemy
+                return defaultEnemy;
+        }
+    }
+
+    /// <summary>
+    /// Whether a player-submitted action can run this turn: the skill must
+    /// belong to the acting hero and be off cooldown (null means the basic
+    /// attack), and the target - when given - must be a living hero the
+    /// action can legally affect (an enemy for basic attacks and
+    /// enemy-targeted skills, the actor itself for Self skills, an ally
+    /// other than the actor for Ally skills). A null target is only valid
+    /// for skills whose target the engine resolves itself (Self / Ally).
+    /// </summary>
+    private bool IsValidChoice(HeroInstance actor, Team allies, Team enemies, SkillData skill, HeroInstance target)
+    {
+        if (skill != null && (!actor.skills.Contains(skill) || !actor.IsSkillReady(skill)))
+        {
+            return false;
+        }
+
+        if (target == null)
+        {
+            return skill != null && skill.target != SkillTarget.Enemy;
+        }
+
+        if (!target.isAlive)
+        {
+            return false;
+        }
+
+        if (skill == null)
+        {
+            return enemies.Contains(target);
+        }
+
+        switch (skill.target)
+        {
+            case SkillTarget.Self:
+                return ReferenceEquals(target, actor);
+            case SkillTarget.Ally:
+                return allies.Contains(target) && !ReferenceEquals(target, actor);
+            default: // SkillTarget.Enemy
+                return enemies.Contains(target);
+        }
     }
 
     /// <summary>Drops heroes from the round queue who died before their turn came up.</summary>

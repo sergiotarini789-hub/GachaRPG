@@ -103,6 +103,26 @@ public class BattleTestRunner : MonoBehaviour
     /// <summary>Current battle speed multiplier (1, 2, or 3); divides the per-turn delay so x2/x3 play the same turns faster. Combat itself is untouched.</summary>
     private int battleSpeed = 1;
 
+    /// <summary>
+    /// True while the battle runs itself (the engine's AI picks every
+    /// action). AUTO OFF hands player-team turns to the player through the
+    /// manual-action handshake below; enemy heroes always act through the
+    /// AI. Every battle starts in AUTO.
+    /// </summary>
+    private bool autoBattle = true;
+
+    /// <summary>The player-team hero currently waiting for a manual action, or null when the runner is not waiting for input.</summary>
+    private HeroInstance manualActor;
+
+    /// <summary>The skill submitted for the pending manual turn (null = basic attack).</summary>
+    private SkillData manualSkill;
+
+    /// <summary>The target submitted for the pending manual turn; null lets the engine resolve Self/Ally skills itself.</summary>
+    private HeroInstance manualTarget;
+
+    /// <summary>True once the player submitted the pending action; the battle loop consumes it the next frame.</summary>
+    private bool manualActionReady;
+
     /// <summary>Last few battle events, most recent first.</summary>
     private readonly List<string> battleLog = new List<string>();
 
@@ -138,6 +158,16 @@ public class BattleTestRunner : MonoBehaviour
 
     /// <summary>Current battle speed multiplier (1-3); the HUD's SPEED toggle reads and cycles this.</summary>
     public int BattleSpeed => battleSpeed;
+
+    /// <summary>True while the engine's AI controls every action (AUTO ON); the HUD's AUTO toggle reads this.</summary>
+    public bool AutoBattle => autoBattle;
+
+    /// <summary>
+    /// The player-team hero waiting for a manual action (AUTO OFF), or
+    /// null outside a manual turn. The HUD enables the action bar and the
+    /// targeting hint while this is set.
+    /// </summary>
+    public HeroInstance ManualActor => manualActor;
 
     /// <summary>Winner shown in the end banner: "Team 1", "Team 2", or "Nobody" on a draw.</summary>
     public string WinnerName => winnerName;
@@ -219,6 +249,58 @@ public class BattleTestRunner : MonoBehaviour
     }
 
     /// <summary>
+    /// Switches between AUTO (the engine's AI acts for everyone) and
+    /// MANUAL (player-team turns wait for <see cref="SubmitManualAction"/>).
+    /// Turning AUTO ON mid-manual-turn makes the AI take over the pending
+    /// turn immediately; turning it OFF takes effect at the next
+    /// player-team turn. Battle math never changes - only who decides.
+    /// </summary>
+    public void SetAutoBattle(bool enabled)
+    {
+        autoBattle = enabled;
+        if (enabled)
+        {
+            ClearManualTurn();
+        }
+    }
+
+    /// <summary>
+    /// Hands the player's chosen action to the battle loop: the skill
+    /// (null = basic attack) and its target (null lets the engine resolve
+    /// Self/Ally skills itself). Ignored unless a manual turn is actually
+    /// pending; the engine re-validates the choice before executing it.
+    /// </summary>
+    public void SubmitManualAction(SkillData skill, HeroInstance target)
+    {
+        if (manualActor == null || battleEnded)
+        {
+            return;
+        }
+
+        manualSkill = skill;
+        manualTarget = target;
+        manualActionReady = true;
+    }
+
+    /// <summary>Parks the given player-team hero's turn until the player submits an action (or AUTO takes over).</summary>
+    private void BeginManualTurn(HeroInstance actor)
+    {
+        manualActor = actor;
+        manualSkill = null;
+        manualTarget = null;
+        manualActionReady = false;
+    }
+
+    /// <summary>Clears the manual-action handshake; called after every resolved turn, on AUTO takeover, and when the battle stops.</summary>
+    private void ClearManualTurn()
+    {
+        manualActor = null;
+        manualSkill = null;
+        manualTarget = null;
+        manualActionReady = false;
+    }
+
+    /// <summary>
     /// Stops the current battle cleanly (the pause menu's EXIT BATTLE):
     /// ends the routine mid-run, clears the pause state, restores the time
     /// scale, and flags the battle as ended. Re-shows the main menu when
@@ -236,6 +318,7 @@ public class BattleTestRunner : MonoBehaviour
         battlePaused = false;
         Time.timeScale = 1f;
         battleRunning = false;
+        ClearManualTurn();
 
         battleEnded = true;
         winnerName = "Nobody";
@@ -453,6 +536,8 @@ public class BattleTestRunner : MonoBehaviour
         battleEnded = false;
         winnerName = string.Empty;
         battleSpeed = 1; // every battle starts at x1; the HUD resyncs its SPEED toggle
+        autoBattle = true; // ...and in AUTO; the HUD resyncs its AUTO toggle
+        ClearManualTurn();
 
         while (!teamBattle.BattleOver)
         {
@@ -482,7 +567,39 @@ public class BattleTestRunner : MonoBehaviour
                 hud.SetActiveHero(actor);
             }
 
-            string battleEvent = teamBattle.PerformTurn(actor);
+            // MANUAL (AUTO OFF): player-team heroes park their turn until
+            // the HUD submits an action; toggling AUTO ON mid-wait lets the
+            // AI take over instead. Enemy heroes (and every hero in AUTO)
+            // always take the unchanged AI path below.
+            bool manualTurn = !autoBattle && team1.Contains(actor);
+            if (manualTurn)
+            {
+                BeginManualTurn(actor);
+
+                // Hold the turn: nothing resolves while we wait. Pause needs
+                // no gate here (the pause overlay blocks the clicks that
+                // would submit an action), but a submitted action is gated
+                // on pause below so nothing ever resolves while frozen.
+                while (!teamBattle.BattleOver && !autoBattle && !manualActionReady)
+                {
+                    yield return null;
+                }
+
+                if (manualActionReady)
+                {
+                    // Pause safety: never execute a submitted action while
+                    // the battle is frozen.
+                    while (battlePaused && !teamBattle.BattleOver)
+                    {
+                        yield return null;
+                    }
+                }
+            }
+
+            string battleEvent = manualTurn && manualActionReady
+                ? teamBattle.PerformTurn(actor, manualSkill, manualTarget)
+                : teamBattle.PerformTurn(actor);
+            ClearManualTurn();
             if (battleEvent != null)
             {
                 AddBattleEvent(battleEvent);
