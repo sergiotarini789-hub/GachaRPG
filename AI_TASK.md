@@ -1,6 +1,6 @@
 # AI TASK
 
-Status: OPEN
+Status: IN_PROGRESS
 Priority: normal
 
 ## Objective
