@@ -1,36 +1,34 @@
 # AI TASK
 
-Status: NONE
-
-There is no active task.
-
-To start one, replace the body of this file below the heading (keep the
-`# AI TASK` heading and set `Status: OPEN`), commit to main, then tell
-the Arena agent to do the AI task. Task format, statuses and the full
-operating manual: AI_AGENT.md.
-
-Template:
-
-```
-# AI TASK
-
-Status: OPEN            # NONE | OPEN | IN_PROGRESS | DONE | FAILED
-Priority: normal        # optional: low | normal | high
+Status: OPEN
+Priority: normal
 
 ## Objective
-One or two sentences describing the change.
+
+Perform a small real project change to verify the complete AI development loop.
 
 ## Requirements
-- ...
+
+- Add a visible "AI PIPELINE TEST" label to the main scene.
+- Place it somewhere clearly visible but unobtrusive.
+- Do not remove or break existing UI.
+- Do not modify unrelated gameplay systems.
+- Keep the implementation simple and maintainable.
 
 ## Constraints
-- ...
+
+- Do not modify CI/CD workflows.
+- Do not run a full Unity Build.
+- Do not change unrelated project files.
 
 ## Acceptance Criteria
+
+- The project remains valid.
+- The change is committed to git.
 - Fast CI passes.
-- ...
+- No unrelated files are changed.
+- Task status can be marked DONE after successful verification.
 
 ## Result
-(Filled in by the AI agent on completion: outcome, final commit SHA,
-CI run id, notes for the human.)
-```
+
+Filled by the AI agent after completion.
