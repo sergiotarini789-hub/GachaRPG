@@ -81,7 +81,7 @@ message is compact JSON:
 
 Fetch it (verified working from the Arena sandbox):
 
-    RUN=$(gh run list --commit <sha> --limit 1 --json databaseId --jq '.[0].databaseId')
+    RUN=$(gh run list --branch main --limit 5 --json databaseId,headSha --jq '[.[] | select(.headSha | startswith("<sha-prefix>"))][0].databaseId')
     gh run view $RUN --json status,conclusion,jobs
     JOB=$(gh api repos/sergiotarini789-hub/GachaRPG/actions/runs/$RUN/jobs --jq '.jobs[0].id')
     gh api repos/sergiotarini789-hub/GachaRPG/check-runs/$JOB/annotations
