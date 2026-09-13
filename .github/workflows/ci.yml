@@ -17,6 +17,10 @@
 #   4. C# script sanity - every script is ASCII-only and structurally
 #      balanced (braces/parentheses/brackets, counting outside strings,
 #      verbatim strings, char literals and comments).
+#   5. Machine-readable status - the final step always publishes an
+#      AI_CI_STATUS annotation (compact JSON: result, failure category,
+#      failed checks, suggested fix) that the AI agent reads back via
+#      the GitHub API, plus a human-readable job summary.
 #
 # Full Unity validation and the Windows x64 player build live in
 # build.yml and run manually via workflow_dispatch.
@@ -359,6 +363,7 @@ jobs:
       # 5) Report.
       # ----------------------------------------------------------------
       - name: Report
+        id: report
         if: success()
         shell: powershell
         run: |
@@ -398,3 +403,91 @@ jobs:
             }
           }
           Write-Output 'The exact error is printed in the failed step above.'
+
+      # ----------------------------------------------------------------
+      # 6) Machine-readable CI status for the AI agent. Always runs -
+      #    pass, fail, or cancelled - and emits one annotation titled
+      #    AI_CI_STATUS whose message is a compact JSON object, readable
+      #    through the GitHub API:
+      #      gh api repos/<owner>/<repo>/actions/runs/<id>/jobs
+      #      gh api repos/<owner>/<repo>/check-runs/<job-id>/annotations
+      #    This step never writes to the repository, so a CI run can
+      #    never trigger another CI run.
+      # ----------------------------------------------------------------
+      - name: Publish machine-readable CI status
+        if: ${{ always() }}
+        id: status
+        shell: powershell
+        env:
+          GIT_OUTCOME: ${{ steps.git.outcome }}
+          STRUCTURE_OUTCOME: ${{ steps.structure.outcome }}
+          META_OUTCOME: ${{ steps.meta.outcome }}
+          SCRIPTS_OUTCOME: ${{ steps.scripts.outcome }}
+          REPORT_OUTCOME: ${{ steps.report.outcome }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          try {
+            $checks = [ordered]@{
+              git       = $env:GIT_OUTCOME
+              structure = $env:STRUCTURE_OUTCOME
+              meta      = $env:META_OUTCOME
+              scripts   = $env:SCRIPTS_OUTCOME
+            }
+            $fixes = @{
+              git       = 'Fix the repository state: HEAD mismatch, git fsck corruption, or merge-conflict markers (see the Check Git integrity step).'
+              structure = 'Fix the project file named in the Check Unity project structure step (ProjectVersion, settings, packages, scene list, or YAML header).'
+              meta      = 'Commit the missing .meta files or fix the guid / duplicate object id exactly as listed in the Check Unity meta files step.'
+              scripts   = 'Fix the C# files named in the Check C# script sanity step (non-ASCII characters or unbalanced braces).'
+            }
+            $failed = @($checks.Keys | Where-Object { $checks[$_] -eq 'failure' })
+            $cancelled = @($checks.Keys | Where-Object { $checks[$_] -eq 'cancelled' })
+            $passedAll = @($checks.Keys | Where-Object { $checks[$_] -eq 'success' }).Count -eq 4
+            $result = 'pass'
+            $category = 'none'
+            $suggested = ''
+            if ($failed.Count -gt 0) {
+              $result = 'fail'
+              $category = 'project-validation'
+              $suggested = $fixes[$failed[0]]
+            } elseif ($cancelled.Count -gt 0 -or -not $passedAll) {
+              $result = 'fail'
+              $category = 'infrastructure'
+              $suggested = 'A check was cancelled or never ran (timeout or runner interruption). Re-run the workflow before changing the project.'
+            } elseif ($env:REPORT_OUTCOME -eq 'failure') {
+              $result = 'fail'
+              $category = 'infrastructure'
+              $suggested = 'All project checks passed but the CI report step failed - a CI problem, not a project problem.'
+            }
+            $now = (Get-Date).ToUniversalTime()
+            $timestamp = $now.ToString('s') + 'Z'
+            $status = [ordered]@{
+              schema         = 1
+              result         = $result
+              category       = $category
+              failed_checks  = $failed
+              checks         = $checks
+              suggested      = $suggested
+              commit         = $env:GITHUB_SHA
+              run_id         = $env:GITHUB_RUN_ID
+              unity_launched = $false
+              timestamp      = $timestamp
+            }
+            $json = $status | ConvertTo-Json -Compress -Depth 5
+            if ($result -eq 'pass') {
+              Write-Output "::notice title=AI_CI_STATUS::$json"
+            } else {
+              Write-Output "::error title=AI_CI_STATUS::$json"
+            }
+            @(
+              '## AI CI status (machine-readable)',
+              '',
+              '```json',
+              ($status | ConvertTo-Json -Depth 5),
+              '```',
+              ''
+            ) | Add-Content -Path $env:GITHUB_STEP_SUMMARY
+            Write-Output "AI_CI_STATUS: $json"
+          } catch {
+            Write-Output "::warning title=AI_CI_STATUS::status publisher failed: $_"
+          }
+          exit 0

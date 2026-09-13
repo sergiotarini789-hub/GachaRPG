@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "note": "Mirror of the last verified Fast CI result, written by the AI agent (never by CI). Authoritative result: the GitHub run itself. Usage: AI_AGENT.md.",
+  "timestamp": "2026-09-13T09:29:29Z",
+  "commit": "02dc5648ff1ce6e5dadf0b346266f8e922dbee5c",
+  "workflow": "Fast CI",
+  "run_id": 34749536740,
+  "result": "pass",
+  "category": "none",
+  "failed_checks": [],
+  "error": "",
+  "suggested": "",
+  "unity_launched": false
+}
