@@ -239,8 +239,11 @@ jobs:
           $assetsRoot = Join-Path $project 'Assets'
 
           # Every file and folder under Assets must have its .meta committed.
+          # (.meta files themselves are skipped - they are the companions,
+          # not the assets needing one.)
           $missingMetas = @()
-          $entries = @(Get-ChildItem -LiteralPath $assetsRoot -Recurse)
+          $entries = @(Get-ChildItem -LiteralPath $assetsRoot -Recurse |
+            Where-Object { $_.Name -notlike '*.meta' })
           foreach ($e in $entries) {
             if (-not (Test-Path -LiteralPath "$($e.FullName).meta")) {
               $missingMetas += $e.FullName
