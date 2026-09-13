@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+
   workflow_dispatch:
 
 concurrency:
@@ -11,7 +12,8 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  build:
+  validate:
+    name: Validate Unity Project
     runs-on: self-hosted
 
     steps:
@@ -23,7 +25,9 @@ jobs:
       - name: Find Unity
         shell: powershell
         run: |
-          $unity = Get-ChildItem "C:\Program Files\Unity\Hub\Editor" -Filter "Unity.exe" -Recurse |
+          $unity = Get-ChildItem "C:\Program Files\Unity\Hub\Editor" `
+            -Filter "Unity.exe" `
+            -Recurse |
             Sort-Object FullName -Descending |
             Select-Object -First 1
 
@@ -32,43 +36,121 @@ jobs:
             exit 1
           }
 
-          echo "UNITY_PATH=$($unity.FullName)" >> $env:GITHUB_ENV
+          "UNITY_PATH=$($unity.FullName)" >> $env:GITHUB_ENV
           Write-Host "Using Unity: $($unity.FullName)"
-      - name: Clean Unity Library
+
+      - name: Validate Project
         shell: powershell
         run: |
-          Write-Host "Cleaning corrupted Unity Library..."
+          $logFile = "$env:GITHUB_WORKSPACE\Build\unity-validation.log"
 
-          $library = "$env:GITHUB_WORKSPACE\Library"
+          New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\Build" | Out-Null
 
-          if (Test-Path $library) {
-            Remove-Item $library -Recurse -Force
-            Write-Host "Library deleted."
-          } else {
-            Write-Host "Library does not exist. Nothing to clean."
+          Write-Host "Starting Unity validation..."
+          Write-Host "Library is intentionally preserved for faster subsequent runs."
+
+          $args = @(
+            "-batchmode"
+            "-nographics"
+            "-quit"
+            "-projectPath"
+            "$env:GITHUB_WORKSPACE"
+            "-logFile"
+            "$logFile"
+          )
+
+          $proc = Start-Process `
+            -FilePath "$env:UNITY_PATH" `
+            -ArgumentList $args `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+
+          $exitCode = $proc.ExitCode
+
+          Write-Host "Unity validation exit code: $exitCode"
+
+          if (Test-Path $logFile) {
+            Write-Host "===== UNITY VALIDATION LOG ====="
+            Get-Content $logFile
+            Write-Host "===== END UNITY VALIDATION LOG ====="
           }
+
+          if ($exitCode -ne 0) {
+            throw "Unity validation failed with exit code $exitCode"
+          }
+
+  build:
+    name: Build Windows x64
+    runs-on: self-hosted
+
+    # Full build only when manually started.
+    # This prevents every AI commit from taking 20-25 minutes.
+    if: github.event_name == 'workflow_dispatch'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          clean: false
+
+      - name: Find Unity
+        shell: powershell
+        run: |
+          $unity = Get-ChildItem "C:\Program Files\Unity\Hub\Editor" `
+            -Filter "Unity.exe" `
+            -Recurse |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1
+
+          if (-not $unity) {
+            Write-Error "Unity.exe not found"
+            exit 1
+          }
+
+          "UNITY_PATH=$($unity.FullName)" >> $env:GITHUB_ENV
+          Write-Host "Using Unity: $($unity.FullName)"
 
       - name: Build Windows
         shell: powershell
         run: |
-          New-Item -ItemType Directory -Force -Path "Build\Windows" | Out-Null
+          $buildDir = "$env:GITHUB_WORKSPACE\Build\Windows"
+          $logFile = "$env:GITHUB_WORKSPACE\Build\unity-build.log"
+          $exePath = "$buildDir\GachaRPG.exe"
 
-          & "$env:UNITY_PATH" `
-            -batchmode `
-            -nographics `
-            -quit `
-            -projectPath "$env:GITHUB_WORKSPACE" `
-            -buildTarget Win64 `
-            -buildWindows64Player "$env:GITHUB_WORKSPACE\Build\Windows\GachaRPG.exe" `
-            -logFile "$env:GITHUB_WORKSPACE\Build\unity-build.log"
+          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
 
-          $exitCode = $LASTEXITCODE
+          Write-Host "Starting Windows x64 build..."
+          Write-Host "Using existing Unity Library cache."
 
-          Write-Host "Unity exit code: $exitCode"
+          $args = @(
+            "-batchmode"
+            "-nographics"
+            "-quit"
+            "-projectPath"
+            "$env:GITHUB_WORKSPACE"
+            "-buildTarget"
+            "Win64"
+            "-buildWindows64Player"
+            "$exePath"
+            "-logFile"
+            "$logFile"
+          )
 
-          if (Test-Path "$env:GITHUB_WORKSPACE\Build\unity-build.log") {
+          $proc = Start-Process `
+            -FilePath "$env:UNITY_PATH" `
+            -ArgumentList $args `
+            -Wait `
+            -PassThru `
+            -NoNewWindow
+
+          $exitCode = $proc.ExitCode
+
+          Write-Host "Unity build exit code: $exitCode"
+
+          if (Test-Path $logFile) {
             Write-Host "===== UNITY BUILD LOG ====="
-            Get-Content "$env:GITHUB_WORKSPACE\Build\unity-build.log"
+            Get-Content $logFile
             Write-Host "===== END UNITY BUILD LOG ====="
           }
 
@@ -76,9 +158,16 @@ jobs:
             throw "Unity build failed with exit code $exitCode"
           }
 
+          if (-not (Test-Path $exePath)) {
+            throw "Build completed but GachaRPG.exe was not found."
+          }
+
+          Write-Host "Windows build successfully created:"
+          Write-Host $exePath
+
       - name: Upload Build
         uses: actions/upload-artifact@v4
         with:
-          name: GachaRPG-Windows
+          name: GachaRPG-Windows-x64-build
           path: Build/Windows/
           if-no-files-found: error
