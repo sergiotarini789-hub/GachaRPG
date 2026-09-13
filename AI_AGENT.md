@@ -7,6 +7,10 @@ re-explain the project: it is all in the repository.
 
 ## The loop
 
+Two task sources, one loop: a single manually supplied task in
+AI_TASK.md, or the autonomous queue in AI_TASKS/ (see the next
+section). Single-task mode:
+
     human writes AI_TASK.md (Status: OPEN) and tells Arena "do the AI task"
       -> Arena implements the change
       -> Arena commits and pushes to main
@@ -23,6 +27,83 @@ Termination rules (hard):
   and reports to the human. No endless retry loops.
 - A task is DONE only when its acceptance criteria hold and Fast CI is
   green on the final commit. That is the completion condition.
+
+## Autonomous task queue (AI_TASKS/)
+
+For batch work, tasks live as individual Markdown files in AI_TASKS/
+(one file per task, file name prefix = task id). The human prepares a
+queue of tasks and starts a session with an instruction like "run the
+autonomous queue"; the agent then processes tasks sequentially without
+further input.
+
+Queue files and tools:
+
+    AI_TASKS/README.md        task format + template (copy it for new tasks)
+    AI_TASKS/SETTINGS.md      MAX_AUTONOMOUS_TASKS (session limit, default 5)
+    AI_TASKS/select_next.py   deterministic, read-only next-task selector
+    AI_TASKS/001-slug.md ...  the tasks themselves
+
+### Precedence and selection order
+
+1. AI_TASK.md (repository root) is the single-task compatibility
+   interface. It is ACTIVE only while its Status is OPEN or
+   IN_PROGRESS - an active AI_TASK.md always takes precedence over the
+   queue; resolve it first.
+2. A queue task left IN_PROGRESS (interrupted session) is resumed
+   first - never start a new task while one is unresolved.
+3. Otherwise the next task is the OPEN task whose Depends ids are all
+   DONE, ordered by priority (HIGH, then NORMAL, then LOW), then by
+   lowest task id.
+
+Always select with `python3 AI_TASKS/select_next.py` (from the repo
+root) so the order stays deterministic; its output also reports queue
+summary, the session limit and any malformed task files.
+
+### Autonomous session procedure
+
+One session = at most MAX_AUTONOMOUS_TASKS tasks (from
+AI_TASKS/SETTINGS.md, default 5). Per task:
+
+1. select_next.py -> exactly ONE task; set its Status to IN_PROGRESS
+2. read the whole task; inspect the relevant existing code first
+3. implement only the requested change (one logical change per task)
+4. validate locally (Fast-CI-equivalent checks)
+5. commit the implementation (with the IN_PROGRESS status), push to main
+6. wait for and read the Fast CI result (AI_CI_STATUS annotation)
+7. on PASS: mark the task DONE and fill its Result section - task id,
+   title, final status, commit SHA, CI run id, validation result,
+   files changed, short implementation description; update
+   AI_CI_RESULT.json; commit, push, confirm Fast CI green
+8. only then select the next task
+
+If Fast CI fails: read the annotation; if the category is
+project-validation and clearly related to the current task, fix it and
+push again (at most 3 fix attempts, then mark the task FAILED with a
+diagnosis). If the category is infrastructure, re-check the run before
+changing anything; if the task cannot continue safely, mark it BLOCKED
+with the reason recorded in its Result section.
+
+End the session (and report completed / failed / blocked / remaining
+OPEN tasks) when: the MAX_AUTONOMOUS_TASKS limit is reached, no task is
+ready, or the human stops it. Never continue indefinitely.
+
+### Unity Build in autonomous sessions
+
+The autonomous loop uses Fast CI only. Run the full Unity Build solely
+when a task's requirements or acceptance criteria explicitly require
+the Windows build artifact - never merely to validate a small change.
+
+### Queue safety rules (in addition to the loop rules)
+
+- One task at a time; one logical change per task.
+- Never modify unrelated systems; never delete project assets unless
+  the task explicitly requires it.
+- Never rewrite existing systems just because another architecture
+  looks cleaner; reuse existing code and conventions.
+- Do not create duplicate UI, managers, data systems or gameplay
+  systems.
+- Never silently skip acceptance criteria; never mark DONE without a
+  green Fast CI run.
 
 ## Project context
 
@@ -106,8 +187,10 @@ verified Fast CI result into AI_CI_RESULT.json in the repository root.
 Update it (a) after fixing a failed run and (b) when completing a task.
 Fields: schema, timestamp, commit, workflow, run_id, result, category,
 failed_checks, error (one short line - never full logs), suggested,
-unity_launched. The GitHub run itself is always authoritative; if the
-file looks stale, trust the run.
+unity_launched, plus an optional task field naming the task the run
+verified ("AI_TASK.md: <title>" or "AI_TASKS/NNN: <title>"). The GitHub
+run itself is always authoritative; if the file looks stale, trust the
+run.
 
 ## Failure playbook
 
@@ -154,7 +237,9 @@ file looks stale, trust the run.
 
 ## Task file format (AI_TASK.md)
 
-One active task at a time:
+One active task at a time. AI_TASK.md is ACTIVE while its Status is
+OPEN or IN_PROGRESS; when it is not active (NONE / DONE / FAILED /
+BLOCKED), the autonomous queue in AI_TASKS/ is used instead:
 
     # AI TASK
     Status: OPEN        # NONE | OPEN | IN_PROGRESS | DONE | FAILED
@@ -168,4 +253,6 @@ One active task at a time:
 
 The human creates the task by editing AI_TASK.md on GitHub (or a local
 commit) and mentions it to Arena. The agent moves the status forward
-and fills Result. Git history of AI_TASK.md is the task archive.
+and fills Result. Git history of AI_TASK.md is the task archive. For
+queueing several tasks at once, use AI_TASKS/ instead (see "Autonomous
+task queue" above).

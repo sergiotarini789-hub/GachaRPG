@@ -21,3 +21,13 @@ This repository supports an autonomous AI coding loop with Arena:
 
 Operating manual, task format, CI result schema and failure playbook:
 `AI_AGENT.md`.
+
+## Autonomous task queue
+
+To queue several tasks at once, add one Markdown file per task to
+`AI_TASKS/` (format and template: `AI_TASKS/README.md`) instead of
+using `AI_TASK.md`. Tell the Arena agent to "run the autonomous
+queue" and it processes up to `MAX_AUTONOMOUS_TASKS` tasks (default 5,
+`AI_TASKS/SETTINGS.md`) sequentially - implement, push, wait for Fast
+CI, mark DONE - and reports when it stops. An active `AI_TASK.md`
+still takes precedence over the queue.
