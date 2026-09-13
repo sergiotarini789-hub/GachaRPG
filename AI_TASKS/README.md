@@ -72,8 +72,23 @@ Its output also reports OPEN tasks that are blocked by unsatisfied
 dependencies (`NOT_READY:` line), a status summary, the session limit
 and warnings about malformed task files.
 
-## Session limit
+## Session limit and automatic continuation
 
-`SETTINGS.md` holds `MAX_AUTONOMOUS_TASKS` (default 5): the maximum
-number of tasks one autonomous session may process before stopping to
-report.
+`SETTINGS.md` holds `MAX_AUTONOMOUS_TASKS` (default 5).
+
+One instruction - "run the autonomous queue" - processes tasks
+automatically, one after another (implement -> push -> Fast CI ->
+DONE -> next), with no further input needed between tasks, until the
+first stop condition:
+
+- the queue is empty or nothing is ready (unsatisfied dependencies),
+- MAX_AUTONOMOUS_TASKS tasks completed this session,
+- a task ends FAILED or BLOCKED (the session stops immediately;
+  never continues past an unresolved failure),
+- or the human says "stop the queue".
+
+Arena cannot wake itself between sessions (no Arena API/webhook
+exists and GitHub Actions cannot implement project changes): across
+sessions exactly one short message ("continue the queue") resumes the
+loop, because all state lives in the task files. See AI_AGENT.md,
+"Can the loop run with no human message at all?".

@@ -59,10 +59,13 @@ Always select with `python3 AI_TASKS/select_next.py` (from the repo
 root) so the order stays deterministic; its output also reports queue
 summary, the session limit and any malformed task files.
 
-### Autonomous session procedure
+### Autonomous session procedure (automatic continuation)
 
-One session = at most MAX_AUTONOMOUS_TASKS tasks (from
-AI_TASKS/SETTINGS.md, default 5). Per task:
+ONE instruction starts the session - "run the autonomous queue" (or
+"continue the queue"). From that point the session runs itself: after
+every successful task the agent AUTOMATICALLY selects and starts the
+next one, with no further human input, until a stop condition fires.
+Per task:
 
 1. select_next.py -> exactly ONE task; set its Status to IN_PROGRESS
 2. read the whole task; inspect the relevant existing code first
@@ -74,18 +77,74 @@ AI_TASKS/SETTINGS.md, default 5). Per task:
    title, final status, commit SHA, CI run id, validation result,
    files changed, short implementation description; update
    AI_CI_RESULT.json; commit, push, confirm Fast CI green
-8. only then select the next task
+8. AUTOMATICALLY continue with step 1 for the next task (this is the
+   automatic continuation: no human prompt between tasks)
+
+The session STOPS (and reports completed / failed / blocked / remaining
+OPEN tasks) at the FIRST of these conditions:
+
+- the queue is empty or no task is ready (all remaining OPEN tasks have
+  unsatisfied dependencies);
+- MAX_AUTONOMOUS_TASKS tasks have been completed this session;
+- a task ends FAILED or BLOCKED - the session stops immediately and
+  NEVER auto-continues past an unresolved failure; the human reviews
+  before starting the next session;
+- the human stops it.
+
+MAX_AUTONOMOUS_TASKS (AI_TASKS/SETTINGS.md, default 5) bounds the
+tasks processed per session instruction. It keeps every session
+reviewable; it is not a global quota. A session resumed later (after
+an interruption or stop) starts a fresh bounded run.
 
 If Fast CI fails: read the annotation; if the category is
 project-validation and clearly related to the current task, fix it and
 push again (at most 3 fix attempts, then mark the task FAILED with a
-diagnosis). If the category is infrastructure, re-check the run before
-changing anything; if the task cannot continue safely, mark it BLOCKED
-with the reason recorded in its Result section.
+diagnosis - which stops the session). If the category is
+infrastructure, re-check the run before changing anything; if the task
+cannot continue safely, mark it BLOCKED with the reason recorded in
+its Result section (also stops the session). Never automatically
+continue to another task while the current one is unresolved.
 
-End the session (and report completed / failed / blocked / remaining
-OPEN tasks) when: the MAX_AUTONOMOUS_TASKS limit is reached, no task is
-ready, or the human stops it. Never continue indefinitely.
+Manual stop: say "stop the queue" at any point. If a task is mid-
+implementation and unpushed, discard its uncommitted changes (git
+checkout/restore), leave its Status IN_PROGRESS with a short note in
+its Result section, and report. IN_PROGRESS tasks are recovered
+automatically: the next session resumes them first (select_next.py),
+never a fresh task.
+
+### How the loop starts, continues and stops
+
+- Starts: a single human instruction ("run the autonomous queue").
+  Equivalently "continue the queue" resumes after a stop/interruption.
+- Continues: automatically inside the session after every PASS (step 8
+  above). Across sessions, any minimal message that indicates
+  continuing works because ALL loop state lives in the repository
+  (task statuses, Results, AI_CI_RESULT.json) - nothing has to be
+  re-explained.
+- Stops: empty/not-ready queue, MAX_AUTONOMOUS_TASKS reached, a task
+  FAILED or BLOCKED, or a human stop.
+
+### Can the loop run with no human message at all? (architecture reality)
+
+No - and this is a real platform limitation, not a choice: the Arena
+agent executes only inside a conversation turn. There is no Arena
+API, webhook, scheduler or GitHub event that can wake an Arena
+session, and no GitHub Actions workflow can implement Unity project
+changes on its own. This repository therefore implements the closest
+reliable mechanism the environment supports:
+
+- WITHIN a session, continuation is fully automatic (one instruction
+  chains up to MAX_AUTONOMOUS_TASKS tasks, each with its own Fast CI
+  gate before the next starts).
+- ACROSS sessions, exactly one short human message per session is
+  required (e.g. "continue the queue").
+
+No fake or simulated self-invocation is implemented: no CI step
+writes to the repository, no workflow triggers the queue, and nothing
+pretends Arena woke up by itself. This also guarantees loop safety:
+CI can never trigger CI, a completed (DONE) task can never be selected
+again, only OPEN tasks are selectable, and every task has a stable,
+deterministic identity (its NNN file-name id).
 
 ### Unity Build in autonomous sessions
 
