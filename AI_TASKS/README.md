@@ -74,7 +74,8 @@ and warnings about malformed task files.
 
 ## Session limit and automatic continuation
 
-`SETTINGS.md` holds `MAX_AUTONOMOUS_TASKS` (default 5).
+`SETTINGS.md` holds `MAX_AUTONOMOUS_TASKS` (currently 20; removing the
+line falls back to the built-in default of 5).
 
 One instruction - "run the autonomous queue" - processes tasks
 automatically, one after another (implement -> push -> Fast CI ->

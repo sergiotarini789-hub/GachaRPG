@@ -39,7 +39,7 @@ further input.
 Queue files and tools:
 
     AI_TASKS/README.md        task format + template (copy it for new tasks)
-    AI_TASKS/SETTINGS.md      MAX_AUTONOMOUS_TASKS (session limit, default 5)
+    AI_TASKS/SETTINGS.md      MAX_AUTONOMOUS_TASKS (session limit, currently 20)
     AI_TASKS/select_next.py   deterministic, read-only next-task selector
     AI_TASKS/001-slug.md ...  the tasks themselves
 
@@ -91,7 +91,8 @@ OPEN tasks) at the FIRST of these conditions:
   before starting the next session;
 - the human stops it.
 
-MAX_AUTONOMOUS_TASKS (AI_TASKS/SETTINGS.md, default 5) bounds the
+MAX_AUTONOMOUS_TASKS (AI_TASKS/SETTINGS.md, currently 20; the built-in
+fallback when no setting exists is 5) bounds the
 tasks processed per session instruction. It keeps every session
 reviewable; it is not a global quota. A session resumed later (after
 an interruption or stop) starts a fresh bounded run.
