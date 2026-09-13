@@ -1,47 +1,43 @@
 # AI TASK
 
-Status: DONE
+Status: IN_PROGRESS
 Priority: normal
 
 ## Objective
 
-Perform a small real project change to verify the complete AI development loop.
+Add a simple main-menu button called "Heroes" to the existing main scene
+(visible, clickable, existing project UI conventions).
 
 ## Requirements
 
-- Add a visible "AI PIPELINE TEST" label to the main scene.
-- Place it somewhere clearly visible but unobtrusive.
-- Do not remove or break existing UI.
-- Do not modify unrelated gameplay systems.
-- Keep the implementation simple and maintainable.
-
-## Constraints
-
-- Do not modify CI/CD workflows.
-- Do not run a full Unity Build.
-- Do not change unrelated project files.
+- Button text must be "Heroes".
+- Button must be visible on the main menu.
+- Clicking it must open the heroes collection.
+- Do not modify unrelated systems.
 
 ## Acceptance Criteria
 
-- The project remains valid.
-- The change is committed to git.
-- Fast CI passes.
+- Fast CI passes on the change commit.
 - No unrelated files are changed.
-- Task status can be marked DONE after successful verification.
+- Task status marked DONE after verification.
 
 ## Result
 
-DONE - 2026-09-13.
+IN PROGRESS - 2026-09-13.
 
-- The main scene already contained the AI PIPELINE TEST label (added by
-  an earlier pipeline test), anchored dead-center at 900x140 with font
-  size 56 - visible but obtrusive.
-- Change made: repositioned the existing label to the top-left corner
-  (400x50 rect, 20px margin, font size 28), exactly matching the task
-  requirement "clearly visible but unobtrusive". The label text remains
-  'AI PIPELINE TEST'; no new objects, no fileID changes, no other UI or
-  gameplay files touched.
-- Commit: f71b5ad1c7b3aa1bfcc81b71cdaeb0a65dfe1bb6
-- Fast CI: run 34752618429, PASS (all checks green, no Unity launched).
-- Note for the human: run the manual Unity Build workflow to see the
-  label in-game if desired.
+- Discovery: the runtime main menu (MainMenu.cs) already contains a
+  Heroes navigation tab wired to BattleTestRunner.OpenHeroesCollection
+  (HeroesScreen). The main scene had no object driving the menu, so on
+  Play no UI appeared at all.
+- Change made (commit 9f9cd64, scene only): added a BattleTestRunner
+  GameObject to SampleScene.unity with startWithMainMenu enabled and the
+  three prototype heroes assigned by role (attack KaelStormblade,
+  defense SirRoland, support LyraLightweaver) - the harness's documented
+  setup. On Play the main scene now shows the existing main menu; its
+  Heroes button is visible, clickable, and opens the heroes collection.
+- Local Fast CI simulation on 9f9cd64: ALL checks pass (structure,
+  55 metas / unique GUIDs, scene fileIDs unique, 31 scripts ASCII and
+  balanced).
+- Fast CI run 34758254563 is QUEUED: the self-hosted runner has been
+  offline since ~11:00 UTC. This task is marked DONE once that run
+  passes; the result will be recorded here.
