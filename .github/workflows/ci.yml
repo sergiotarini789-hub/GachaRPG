@@ -1,116 +1,134 @@
-# Unity CI/CD for GachaRPG - runs on the self-hosted Windows runner.
+# Fast CI for GachaRPG - runs on every push to main.
 #
-# Trigger: every push to main (plus optional manual runs from the Actions
-# tab). The pipeline:
-#   1. checks out the repository
-#   2. detects the Unity project (editor version + Unity.exe location)
-#   3. runs automated validation (EditMode tests when test assemblies
-#      exist; a full compile/import pass while they do not)
-#   4. builds the Windows x64 player into Build/Windows
-#   5. reports success (job summary + downloadable build artifact)
-#   6. on any failure, prints the exact error lines from the Unity logs
+# Deliberately NEVER launches Unity: a cold Unity import costs 15+ minutes
+# and the AI development loop must stay fast. Instead this workflow checks,
+# in a few seconds:
 #
-# One-time runner requirements:
-#   - Unity 6000.3.24f1 installed at the Unity Hub default location
-#     (C:\Program Files\Unity\Hub\Editor\6000.3.24f1\Editor\Unity.exe),
-#     or a UNITY_EDITOR_PATH environment variable on the runner that
-#     points at Unity.exe.
-#   - Unity Hub signed in once on that machine, so batch mode has a
-#     valid license.
-#   - git on PATH (already required by any actions runner).
+#   1. Git integrity - the checkout matches the pushed commit, the object
+#      database is healthy (git fsck), and no merge-conflict markers are
+#      left in any tracked file.
+#   2. Project structure - ProjectVersion.txt pins the Unity version and
+#      that exact editor is installed on the runner, settings and package
+#      manifests parse, every scene referenced by the Build Settings
+#      exists, and Unity YAML files carry proper headers.
+#   3. Unity meta files - every asset and folder under Assets/ has its
+#      .meta committed, every .meta carries a GUID, all GUIDs are unique,
+#      and scene files contain no duplicate object ids.
+#   4. C# script sanity - every script is ASCII-only and structurally
+#      balanced (braces/parentheses/brackets, counting outside strings,
+#      verbatim strings, char literals and comments).
 #
-# The actions are pinned to the Node 24 generation (checkout@v5 /
-# upload-artifact@v6); the runner must be version 2.327.1 or newer
-# (any runner updated since August 2025 qualifies).
+# Full Unity validation and the Windows x64 player build live in
+# build.yml and run manually via workflow_dispatch.
 
-name: Unity CI/CD (self-hosted Windows)
+name: Fast CI
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
-# Unity locks the project folder while it is open, so never let two runs
-# of the same branch build at the same time on the runner. New pushes
-# queue up instead of cancelling a build in progress.
+# A newer push supersedes the previous check. Nothing stateful runs here
+# (no Unity, no shared caches), so cancelling an in-progress fast check is
+# always safe and keeps the loop responsive.
 concurrency:
-  group: unity-ci-${{ github.ref }}
-  cancel-in-progress: false
+  group: fast-ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  build:
-    name: Validate and build (Windows x64)
+  fast-checks:
+    name: Fast project checks (no Unity import)
     runs-on: self-hosted
-    timeout-minutes: 90
+    timeout-minutes: 5
 
     steps:
       # ----------------------------------------------------------------
-      # 1) Checkout the repository.
+      # Checkout - clean:false keeps the Unity Library folder in the
+      # workspace so the manual full-build workflow stays fast.
       # ----------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v5
-        # Tip: adding  clean: false  keeps the Unity Library folder
-        # between runs, which makes imports much faster.
+        with:
+          clean: false
 
       # ----------------------------------------------------------------
-      # 2) Detect the Unity project: version, editor executable, name.
+      # 1) Git integrity.
       # ----------------------------------------------------------------
-      - name: Detect Unity project
-        id: detect
+      - name: Check Git integrity
+        id: git
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+
+          # The checkout must be exactly the commit that was pushed.
+          $head = (git rev-parse HEAD | Select-Object -First 1).Trim()
+          if ($head -ne $env:GITHUB_SHA) {
+            Write-Output "::error::Checkout integrity failed: HEAD is $head but the workflow runs for $($env:GITHUB_SHA)"
+            exit 1
+          }
+          Write-Output "Checked out commit: $head"
+
+          # Object database health.
+          git fsck --no-dangling
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output "::error::git fsck reported repository corruption (exit code $LASTEXITCODE)"
+            exit 1
+          }
+          Write-Output 'git fsck: object database OK'
+
+          # No merge-conflict markers anywhere in tracked files.
+          git grep -n -E '^(<{7} |>{7} |={7}$)' -- .
+          $grepExit = $LASTEXITCODE
+          if ($grepExit -eq 0) {
+            Write-Output '::error::Merge conflict markers found in tracked files (see the list above)'
+            exit 1
+          }
+          if ($grepExit -gt 1) {
+            Write-Output "::error::git grep failed with exit code $grepExit"
+            exit 1
+          }
+          Write-Output 'No merge conflict markers in tracked files'
+
+          # Informational only: leftovers from earlier jobs (the Unity
+          # Library and Build outputs are git-ignored and expected).
+          $untracked = @(git status --porcelain)
+          if ($untracked.Count -gt 0) {
+            Write-Output "Note: $($untracked.Count) untracked or modified entries in the workspace (tracked files are always reset by checkout):"
+            foreach ($u in $untracked) { Write-Output "  $u" }
+          } else {
+            Write-Output 'Workspace clean (no untracked, non-ignored files)'
+          }
+          exit 0
+
+      # ----------------------------------------------------------------
+      # 2) Unity project structure (files only - Unity is never launched).
+      # ----------------------------------------------------------------
+      - name: Check Unity project structure
+        id: structure
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $project = $env:GITHUB_WORKSPACE
-          Write-Output "Checkout path: $project"
+          $assetsRoot = Join-Path $project 'Assets'
 
-          # A Unity project is identified by ProjectSettings/ProjectVersion.txt.
+          # --- Unity version pinned by the project ---
           $versionFile = Join-Path $project 'ProjectSettings\ProjectVersion.txt'
           if (-not (Test-Path $versionFile)) {
             Write-Output "::error::Unity project not detected - ProjectSettings\ProjectVersion.txt is missing from $project"
             exit 1
           }
-
           $versionLine = Get-Content $versionFile |
             Where-Object { $_ -like 'm_EditorVersion:*' } |
             Select-Object -First 1
           if (-not $versionLine) {
-            Write-Output '::error::ProjectVersion.txt exists but contains no m_EditorVersion line - the Unity version cannot be determined'
+            Write-Output '::error::ProjectVersion.txt contains no m_EditorVersion line - the Unity version cannot be determined'
             exit 1
           }
           $unityVersion = ($versionLine -replace '^\s*m_EditorVersion:\s*', '').Trim()
           Write-Output "Unity version required by the project: $unityVersion"
+          Add-Content -Path $env:GITHUB_ENV -Value "UNITY_VERSION=$unityVersion"
 
-          # The product name from ProjectSettings.asset names the built .exe.
-          $productName = ''
-          $settingsFile = Join-Path $project 'ProjectSettings\ProjectSettings.asset'
-          if (Test-Path $settingsFile) {
-            $nameLine = Get-Content $settingsFile |
-              Where-Object { $_ -match '^\s*productName:' } |
-              Select-Object -First 1
-            if ($nameLine) {
-              $productName = ($nameLine -replace '^\s*productName:\s*', '').Trim().Trim('"')
-            }
-          }
-          if ([string]::IsNullOrWhiteSpace($productName)) {
-            $productName = Split-Path -Leaf $project
-          }
-          Write-Output "Product name: $productName"
-
-          # Refuse to start while a Unity editor already has this checkout
-          # open - the project lock would make every batch command fail.
-          $runningHere = @(Get-CimInstance Win32_Process -Filter "Name = 'Unity.exe'" -ErrorAction SilentlyContinue |
-            Where-Object {
-              $_.CommandLine -and
-              $_.CommandLine.ToLower().Contains($project.ToLower())
-            })
-          if ($runningHere.Count -gt 0) {
-            $procIds = ($runningHere | ForEach-Object { $_.ProcessId }) -join ', '
-            Write-Output "::error::A Unity editor already has this project open on the runner (Unity.exe PID $procIds). Close it and run the workflow again."
-            exit 1
-          }
-
-          # Locate the Unity editor for the exact version the project needs:
-          # UNITY_EDITOR_PATH overrides, then the standard Unity Hub locations.
+          # --- the exact editor must be installed for the full build ---
           $candidates = @()
           if ($env:UNITY_EDITOR_PATH) {
             $override = $env:UNITY_EDITOR_PATH
@@ -132,331 +150,248 @@ jobs:
             Select-Object -First 1
           if (-not $unityExe) {
             $searched = ($candidates | Where-Object { $_ }) -join ' | '
-            Write-Output "::error::Unity $unityVersion was not found on this runner. Searched: $searched. Install it with Unity Hub (Installs > Install Editor > $unityVersion) or set UNITY_EDITOR_PATH on the runner to the full path of Unity.exe, then run the workflow again."
+            Write-Output "::error::Unity $unityVersion is not installed on this runner (searched: $searched). The manual full-build workflow would fail - install it with Unity Hub or set UNITY_EDITOR_PATH."
             exit 1
           }
-          Write-Output "Unity editor executable: $unityExe"
+          Write-Output "Unity editor available for full builds: $unityExe"
 
-          # Publish the values for the later steps.
-          Add-Content -Path $env:GITHUB_ENV -Value "UNITY_EXE=$unityExe"
-          Add-Content -Path $env:GITHUB_ENV -Value "UNITY_VERSION=$unityVersion"
-          Add-Content -Path $env:GITHUB_ENV -Value "PRODUCT_NAME=$productName"
-
-      # ----------------------------------------------------------------
-      # 3) Run automated validation / tests.
-      #    The project has no test assemblies yet, so this currently
-      #    performs a full import + compile pass (any compiler error
-      #    fails the job). The moment an *.asmdef with 'test' in its
-      #    name is added, this step automatically switches to running
-      #    the real EditMode tests through the Unity Test Framework.
-      # ----------------------------------------------------------------
-      - name: Run automated validation and tests
-        id: validate
-        shell: powershell
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $project = $env:GITHUB_WORKSPACE
-          $unity = $env:UNITY_EXE
-
-          $testsLog = Join-Path $env:RUNNER_TEMP 'unity-tests.log'
-          $testsResults = Join-Path $env:RUNNER_TEMP 'unity-test-results.xml'
-          Remove-Item $testsLog, $testsResults -ErrorAction SilentlyContinue
-
-          $testAssemblies = @(Get-ChildItem -Path (Join-Path $project 'Assets') -Recurse -Filter '*.asmdef' -ErrorAction SilentlyContinue |
-            Where-Object { $_.BaseName -match '(?i)test' })
-
-          if ($testAssemblies.Count -gt 0) {
-            $asmNames = ($testAssemblies | ForEach-Object { $_.Name }) -join ', '
-            Write-Output "Test assemblies found: $asmNames"
-            Write-Output 'Running EditMode tests with the Unity Test Framework...'
-            $unityArgs = @(
-              '-batchmode', '-nographics',
-              '-projectPath', "$project",
-              '-buildTarget', 'win64',
-              '-runTests', '-testPlatform', 'EditMode',
-              '-testResults', "$testsResults",
-              '-logFile', "$testsLog"
-            )
-          } else {
-            Write-Output 'No test assemblies found - running the validation pass instead.'
-            Write-Output 'Unity will import the project and compile every script; any compiler error fails this job.'
-            $unityArgs = @(
-              '-batchmode', '-nographics', '-quit',
-              '-projectPath', "$project",
-              '-buildTarget', 'win64',
-              '-logFile', "$testsLog"
-            )
+          # --- settings and packages parse ---
+          $settingsFile = Join-Path $project 'ProjectSettings\ProjectSettings.asset'
+          $ebsFile = Join-Path $project 'ProjectSettings\EditorBuildSettings.asset'
+          foreach ($f in @($settingsFile, $ebsFile)) {
+            if (-not (Test-Path $f)) {
+              Write-Output "::error::Required project file is missing: $f"
+              exit 1
+            }
+          }
+          $nameLine = Get-Content $settingsFile |
+            Where-Object { $_ -match '^\s*productName:' } |
+            Select-Object -First 1
+          if (-not $nameLine -or [string]::IsNullOrWhiteSpace(($nameLine -replace '^\s*productName:\s*', ''))) {
+            Write-Output '::error::productName is empty or missing in ProjectSettings.asset'
+            exit 1
           }
 
-          # Start-Process -Wait instead of the call operator: Unity.exe can
-          # return control to PowerShell without setting $LASTEXITCODE, so
-          # the step must wait for the editor process explicitly.
-          $quotedArgs = @($unityArgs | ForEach-Object {
-            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
-          })
-          $proc = Start-Process -FilePath $unity -ArgumentList $quotedArgs -Wait -PassThru -NoNewWindow
-          $unityExit = $proc.ExitCode
-          Write-Output "Unity validation/test run finished with exit code $unityExit"
+          try {
+            $manifest = Get-Content (Join-Path $project 'Packages\manifest.json') -Raw | ConvertFrom-Json
+          } catch {
+            Write-Output "::error::Packages\manifest.json is not valid JSON: $_"
+            exit 1
+          }
+          $packageCount = ($manifest.dependencies.PSObject.Properties | Measure-Object).Count
+          Write-Output "Packages/manifest.json OK ($packageCount dependencies)"
 
-          $testRunFailed = $false
-          if ($testAssemblies.Count -gt 0 -and (Test-Path $testsResults)) {
+          $lockFile = Join-Path $project 'Packages\packages-lock.json'
+          if (Test-Path $lockFile) {
             try {
-              [xml]$results = Get-Content $testsResults
-              $run = $results.'test-run'
-              if ($run) {
-                Write-Output "Test results: $($run.total) total, $($run.passed) passed, $($run.failed) failed, $($run.skipped) skipped"
-                Add-Content -Path $env:GITHUB_ENV -Value "TESTS_SUMMARY=EditMode tests: $($run.passed) of $($run.total) passed"
-                if ($run.result -and ([string]$run.result) -ne 'Passed') {
-                  $testRunFailed = $true
-                }
-              }
+              Get-Content $lockFile -Raw | ConvertFrom-Json | Out-Null
+              Write-Output 'Packages/packages-lock.json OK'
             } catch {
-              Write-Output "Warning: could not parse the test results file - $_"
+              Write-Output "::error::Packages\packages-lock.json is not valid JSON: $_"
+              exit 1
             }
-          }
-          if ($testAssemblies.Count -eq 0) {
-            Add-Content -Path $env:GITHUB_ENV -Value "TESTS_SUMMARY=Validation pass: project imports and compiles cleanly (Unity $env:UNITY_VERSION)"
           }
 
-          if ($unityExit -ne 0 -or $testRunFailed) {
-            if ($testRunFailed) {
-              Write-Output '::error::EditMode tests FAILED - failing test names and messages are listed in the Report exact error step below.'
-            } else {
-              Write-Output "::error::Unity validation/test run FAILED with exit code $unityExit - exact error lines are listed in the Report exact error step below."
-            }
+          # --- every scene in the Build Settings must exist ---
+          $scenes = @(Select-String -Path $ebsFile -Pattern '^\s*path:\s*(Assets/.+\.unity)\s*$' |
+            ForEach-Object { $_.Matches[0].Groups[1].Value })
+          if ($scenes.Count -eq 0) {
+            Write-Output '::error::No scenes are configured in EditorBuildSettings.asset - a player build would produce an empty game'
             exit 1
           }
-
-          if ($testAssemblies.Count -gt 0) {
-            Write-Output 'EditMode tests PASSED.'
-          } else {
-            Write-Output 'Validation pass PASSED - every script compiled without errors.'
+          $missingScenes = @($scenes | Where-Object { -not (Test-Path (Join-Path $project $_)) })
+          if ($missingScenes.Count -gt 0) {
+            Write-Output "::error::Scenes referenced by the Build Settings are missing from the repository: $($missingScenes -join ', ')"
+            exit 1
           }
+          Write-Output "Build Settings scene(s) present: $($scenes -join ', ')"
+          Add-Content -Path $env:GITHUB_ENV -Value "SCENE_COUNT=$($scenes.Count)"
+
+          # --- Unity YAML files must carry the YAML header ---
+          # (.inputactions and ProjectSettings/XRSettings.asset are JSON by
+          # design and are not checked)
+          $yamlFiles = @(Get-ChildItem -Path $assetsRoot -Recurse -Include *.unity, *.asset, *.prefab, *.mat, *.controller, *.anim)
+          $yamlFiles += @(Get-ChildItem -Path (Join-Path $project 'ProjectSettings') -Filter '*.asset' |
+            Where-Object { $_.Name -ne 'XRSettings.asset' })
+          $badHeaders = @()
+          foreach ($f in $yamlFiles) {
+            $first = @(Get-Content -LiteralPath $f.FullName -TotalCount 2)
+            if ($first.Count -lt 2 -or $first[0] -ne '%YAML 1.1' -or -not $first[1].StartsWith('%TAG !u!')) {
+              $badHeaders += $f.FullName
+            }
+          }
+          if ($badHeaders.Count -gt 0) {
+            Write-Output "::error::Unity YAML files with a broken header (expected '%YAML 1.1' + '%TAG !u!'): $($badHeaders -join ', ')"
+            exit 1
+          }
+          Write-Output "Unity YAML headers OK ($($yamlFiles.Count) files)"
           exit 0
 
       # ----------------------------------------------------------------
-      # 4) Build the Windows x64 player.
+      # 3) Unity meta files and GUIDs.
       # ----------------------------------------------------------------
-      - name: Build Unity project for Windows
-        id: build
+      - name: Check Unity meta files and GUIDs
+        id: meta
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $project = $env:GITHUB_WORKSPACE
-          $unity = $env:UNITY_EXE
+          $assetsRoot = Join-Path $project 'Assets'
 
-          $buildLog = Join-Path $env:RUNNER_TEMP 'unity-build.log'
-          Remove-Item $buildLog -ErrorAction SilentlyContinue
-
-          $buildDir = Join-Path $project 'Build\Windows'
-          if (Test-Path $buildDir) { Remove-Item $buildDir -Recurse -Force }
-          New-Item -ItemType Directory -Force -Path $buildDir | Out-Null
-
-          $exePath = Join-Path $buildDir "$($env:PRODUCT_NAME).exe"
-          Write-Output "Building Windows x64 player: $exePath"
-
-          $unityArgs = @(
-            '-batchmode', '-nographics', '-quit',
-            '-projectPath', "$project",
-            '-buildTarget', 'win64',
-            '-buildWindows64Player', "$exePath",
-            '-logFile', "$buildLog"
-          )
-          # Same as the validation step: wait for the editor explicitly.
-          $quotedArgs = @($unityArgs | ForEach-Object {
-            if ($_ -match '\s') { '"' + $_ + '"' } else { $_ }
-          })
-          $proc = Start-Process -FilePath $unity -ArgumentList $quotedArgs -Wait -PassThru -NoNewWindow
-          $unityExit = $proc.ExitCode
-          Write-Output "Unity build run finished with exit code $unityExit"
-
-          $exeExists = Test-Path $exePath -PathType Leaf
-          if ($unityExit -ne 0 -or -not $exeExists) {
-            Write-Output "::error::Windows build FAILED (Unity exit code $unityExit, built exe found: $exeExists) - exact error lines are listed in the Report exact error step below."
+          # Every file and folder under Assets must have its .meta committed.
+          $missingMetas = @()
+          $entries = @(Get-ChildItem -LiteralPath $assetsRoot -Recurse)
+          foreach ($e in $entries) {
+            if (-not (Test-Path -LiteralPath "$($e.FullName).meta")) {
+              $missingMetas += $e.FullName
+            }
+          }
+          if ($missingMetas.Count -gt 0) {
+            $list = ($missingMetas | Select-Object -First 10) -join ', '
+            Write-Output "::error::Unity assets without a committed .meta file ($($missingMetas.Count) total, showing up to 10): $list. Add the missing .meta files - otherwise Unity regenerates them with new GUIDs on every machine."
             exit 1
           }
 
-          $dataDir = Join-Path $buildDir "$($env:PRODUCT_NAME)_Data"
-          if (-not (Test-Path $dataDir)) {
-            Write-Output "::error::The build produced $exePath but no $($env:PRODUCT_NAME)_Data folder next to it - the player build is incomplete."
-            exit 1
+          # Advisory: the project-root Assets.meta is not tracked in this
+          # repository; Unity regenerates it locally, so this is a note,
+          # not a failure.
+          if (-not (Test-Path (Join-Path $project 'Assets.meta'))) {
+            Write-Output 'Note: Assets.meta is not committed (Unity regenerates it locally) - advisory only.'
           }
 
-          $bytes = (Get-ChildItem $buildDir -Recurse -File | Measure-Object -Property Length -Sum).Sum
-          $sizeMb = [math]::Round($bytes / 1MB, 1)
-          Write-Output "Build OK: $exePath (folder size $sizeMb MB)"
-          Add-Content -Path $env:GITHUB_ENV -Value "BUILD_SUMMARY=Windows x64 player built: $($env:PRODUCT_NAME).exe ($sizeMb MB) in Build\Windows"
+          # Every .meta carries a GUID and all GUIDs are unique.
+          $metas = @(Get-ChildItem -LiteralPath $assetsRoot -Recurse -Filter '*.meta')
+          $guidMap = @{}
+          $dupes = @()
+          $noGuid = @()
+          foreach ($m in $metas) {
+            $g = Select-String -LiteralPath $m.FullName -Pattern '^guid: ([0-9a-f]{32})\s*$' |
+              Select-Object -First 1
+            if (-not $g) {
+              $noGuid += $m.FullName
+              continue
+            }
+            $guid = $g.Matches[0].Groups[1].Value
+            if ($guidMap.ContainsKey($guid)) {
+              $dupes += "$($m.FullName) duplicates $($guidMap[$guid]) (guid $guid)"
+            } else {
+              $guidMap[$guid] = $m.FullName
+            }
+          }
+          if ($noGuid.Count -gt 0) {
+            Write-Output "::error::.meta files without a valid guid line: $($noGuid -join ', ')"
+            exit 1
+          }
+          if ($dupes.Count -gt 0) {
+            Write-Output "::error::Duplicate Unity GUIDs found (this silently breaks asset references): $($dupes -join ' | ')"
+            exit 1
+          }
+          Write-Output "Meta files OK: $($metas.Count) metas, $($guidMap.Count) unique GUIDs"
+          Add-Content -Path $env:GITHUB_ENV -Value "META_COUNT=$($metas.Count)"
+
+          # Scene files must not contain duplicate object ids (a classic
+          # hand-editing accident that breaks scene loading).
+          $sceneFiles = @(Get-ChildItem -LiteralPath $assetsRoot -Recurse -Filter '*.unity')
+          foreach ($sf in $sceneFiles) {
+            $ids = @(Select-String -LiteralPath $sf.FullName -Pattern '^--- !u!\d+ &(\d+)$' |
+              ForEach-Object { $_.Matches[0].Groups[1].Value })
+            $unique = @($ids | Select-Object -Unique)
+            if ($unique.Count -ne $ids.Count) {
+              Write-Output "::error::Duplicate object ids inside $($sf.FullName) - the scene YAML is corrupt"
+              exit 1
+            }
+          }
+          Write-Output "Scene object ids OK ($($sceneFiles.Count) scene files)"
           exit 0
 
       # ----------------------------------------------------------------
-      # 5a) Upload the build, then report success.
+      # 4) C# script sanity (structural - not a compiler).
       # ----------------------------------------------------------------
-      - name: Upload Windows build artifact
-        if: success()
-        uses: actions/upload-artifact@v6
-        with:
-          name: ${{ env.PRODUCT_NAME }}-windows-x64-build
-          path: Build/Windows/
-          retention-days: 14
+      - name: Check C# script sanity
+        id: scripts
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $project = $env:GITHUB_WORKSPACE
 
-      - name: Report success
+          # Strips regular strings, verbatim strings, char literals, line
+          # comments and block comments before counting delimiters, so
+          # braces inside text never cause false failures.
+          $pattern = '(?s)@"(?:""|[^"])*"|"(?:\\.|[^"\\])*"|''(?:\\.|[^''\\])*''|//[^\n]*|/\*.*?\*/'
+
+          $scripts = @(Get-ChildItem -LiteralPath (Join-Path $project 'Assets') -Recurse -Filter '*.cs')
+          $badAscii = @()
+          $unbalanced = @()
+          foreach ($s in $scripts) {
+            $bytes = [System.IO.File]::ReadAllBytes($s.FullName)
+            if (@($bytes -gt 127).Count -gt 0) {
+              $badAscii += $s.FullName
+              continue
+            }
+            $text = [System.IO.File]::ReadAllText($s.FullName)
+            $stripped = [regex]::Replace($text, $pattern, '')
+            $pairs = @(@('{', '}'), @('(', ')'), @('[', ']'))
+            foreach ($p in $pairs) {
+              $o = [regex]::Matches($stripped, [regex]::Escape($p[0])).Count
+              $c = [regex]::Matches($stripped, [regex]::Escape($p[1])).Count
+              if ($o -ne $c) {
+                $unbalanced += "$($s.FullName): '$($p[0])'=$o '$($p[1])'=$c"
+                break
+              }
+            }
+          }
+          if ($badAscii.Count -gt 0) {
+            Write-Output "::error::C# files contain non-ASCII characters (repository convention is ASCII-only): $($badAscii -join ', ')"
+            exit 1
+          }
+          if ($unbalanced.Count -gt 0) {
+            Write-Output "::error::C# files with unbalanced braces/parentheses/brackets (strings and comments excluded): $($unbalanced -join ' | ')"
+            exit 1
+          }
+          Write-Output "C# scripts OK: $($scripts.Count) files, ASCII-only and structurally balanced"
+          Add-Content -Path $env:GITHUB_ENV -Value "SCRIPT_COUNT=$($scripts.Count)"
+          exit 0
+
+      # ----------------------------------------------------------------
+      # 5) Report.
+      # ----------------------------------------------------------------
+      - name: Report
         if: success()
         shell: powershell
         run: |
           $summaryLines = @(
-            '## Unity CI/CD - success',
+            '## Fast CI - passed',
             '',
-            "- Unity version: $($env:UNITY_VERSION)",
-            "- Product: $($env:PRODUCT_NAME)",
-            "- Validation/tests: $($env:TESTS_SUMMARY)",
-            "- Build: $($env:BUILD_SUMMARY)",
-            "- Commit: $($env:GITHUB_SHA)"
+            "- Commit: $($env:GITHUB_SHA)",
+            "- Git integrity: HEAD matches the push, fsck clean, no conflict markers",
+            "- Project structure: Unity $($env:UNITY_VERSION) project intact, exact editor installed, packages and scenes resolve",
+            "- Meta files: $($env:META_COUNT) metas committed, all GUIDs unique",
+            "- Scripts: $($env:SCRIPT_COUNT) C# files ASCII-clean and structurally balanced",
+            '',
+            'No Unity import was launched. For full validation and the Windows x64 build, run the **Unity Build** workflow manually.'
           )
           $summaryLines | Add-Content -Path $env:GITHUB_STEP_SUMMARY
-          Write-Output "::notice::Windows x64 build succeeded - $($env:PRODUCT_NAME).exe produced in Build\Windows with Unity $($env:UNITY_VERSION)."
-          Write-Output 'CI completed successfully: validation passed and the Windows build is ready (see the build artifact, or Build\Windows on the runner).'
+          Write-Output '::notice::Fast CI passed - the project checks out cleanly without launching Unity.'
 
-      # ----------------------------------------------------------------
-      # 5b/6) Anything failed: attach the logs, then report the exact
-      #       error lines from them.
-      # ----------------------------------------------------------------
-      - name: Upload CI logs (failure diagnostics)
-        if: ${{ !success() }}
-        uses: actions/upload-artifact@v6
-        with:
-          name: ci-logs-run-${{ github.run_number }}
-          path: |
-            ${{ runner.temp }}/unity-tests.log
-            ${{ runner.temp }}/unity-test-results.xml
-            ${{ runner.temp }}/unity-build.log
-          if-no-files-found: ignore
-          retention-days: 14
-
-      - name: Report exact error
+      - name: Report failed checks
         if: ${{ !success() }}
         shell: powershell
         env:
-          DETECT_OUTCOME: ${{ steps.detect.outcome }}
-          VALIDATE_OUTCOME: ${{ steps.validate.outcome }}
-          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          GIT_OUTCOME: ${{ steps.git.outcome }}
+          STRUCTURE_OUTCOME: ${{ steps.structure.outcome }}
+          META_OUTCOME: ${{ steps.meta.outcome }}
+          SCRIPTS_OUTCOME: ${{ steps.scripts.outcome }}
         run: |
           $ErrorActionPreference = 'Continue'
-
-          Write-Output '=================================================================='
-          Write-Output ' CI FAILED - exact error report'
-          Write-Output '=================================================================='
-
-          foreach ($phase in @(
-            @{ Label = 'Detect Unity project'; Outcome = $env:DETECT_OUTCOME },
-            @{ Label = 'Validation / tests';   Outcome = $env:VALIDATE_OUTCOME },
-            @{ Label = 'Build Windows player'; Outcome = $env:BUILD_OUTCOME }
+          Write-Output 'Fast CI failed. Failed check(s):'
+          foreach ($s in @(
+            @{ Label = 'Git integrity';        Outcome = $env:GIT_OUTCOME },
+            @{ Label = 'Project structure';    Outcome = $env:STRUCTURE_OUTCOME },
+            @{ Label = 'Meta files and GUIDs'; Outcome = $env:META_OUTCOME },
+            @{ Label = 'C# script sanity';     Outcome = $env:SCRIPTS_OUTCOME }
           )) {
-            if ($phase.Outcome -eq 'failure') {
-              Write-Output "FAILED PHASE: $($phase.Label)"
+            if ($s.Outcome -eq 'failure') {
+              Write-Output " - $($s.Label)"
             }
           }
-          Write-Output ''
-
-          $script:allErrors = @()
-
-          function Show-UnityLogErrors([string]$logPath, [string]$phaseLabel) {
-            if (-not (Test-Path $logPath)) {
-              Write-Output "[$phaseLabel] no log file at $logPath - this phase never started Unity, or failed before a log could be written."
-              return
-            }
-            Write-Output "----- $phaseLabel - error lines from $(Split-Path -Leaf $logPath) -----"
-            $lines = @(Get-Content $logPath -ErrorAction SilentlyContinue)
-            $matched = @()
-            foreach ($line in $lines) {
-              if ($null -eq $line) { continue }
-              if ($line -match 'error CS\d+' -or
-                  $line -match 'Compilation failed' -or
-                  $line -match 'Scripts have compiler errors' -or
-                  $line -match 'Aborting batchmode' -or
-                  $line -match 'Error building Player' -or
-                  $line -match 'BuildFailedException' -or
-                  $line -match 'another Unity instance' -or
-                  $line -match 'no valid .*licen[cs]e' -or
-                  $line -match 'licen[cs]e .*(fail|error|expired)' -or
-                  $line -match 'Unhandled exception' -or
-                  $line -match 'Test run failed') {
-                $t = $line.Trim()
-                if ($t) { $matched += $t }
-              }
-            }
-            $matched = @($matched | Select-Object -Unique)
-            if ($matched.Count -gt 0) {
-              foreach ($m in $matched) {
-                Write-Output "  ERROR: $m"
-                $script:allErrors += $m
-              }
-              # Surface the first errors as annotations in the GitHub UI.
-              $i = 0
-              foreach ($m in $matched) {
-                if ($i -ge 8) { break }
-                $a = ([string]$m -replace '\s+', ' ').Trim()
-                if ($a.Length -gt 230) { $a = $a.Substring(0, 230) + '...' }
-                $a = $a.Replace('%', '%25')
-                Write-Output "::error::$a"
-                $i++
-              }
-            } else {
-              Write-Output '  (no error-pattern lines were found - the first 15 and last 40 log lines follow for context)'
-              foreach ($l in @($lines | Select-Object -First 15)) { Write-Output "  HEAD: $l" }
-              foreach ($l in @($lines | Select-Object -Last 40)) { Write-Output "  TAIL: $l" }
-              # One annotation with the log head, so the cause of startup
-              # failures (license, arguments, version) is visible directly.
-              $head = (@($lines | Where-Object { $_ -and $_.Trim() } | Select-Object -First 3) -join ' | ')
-              $head = ([string]$head -replace '\s+', ' ').Trim()
-              if ($head.Length -gt 230) { $head = $head.Substring(0, 230) + '...' }
-              $head = $head.Replace('%', '%25')
-              Write-Output "::error::No error-pattern lines in $(Split-Path -Leaf $logPath); log head: $head"
-            }
-            Write-Output ''
-          }
-
-          Show-UnityLogErrors (Join-Path $env:RUNNER_TEMP 'unity-tests.log') 'Validation / test phase'
-          Show-UnityLogErrors (Join-Path $env:RUNNER_TEMP 'unity-build.log') 'Build phase'
-
-          # Failing test details from the NUnit results file, if tests ran.
-          $resultsPath = Join-Path $env:RUNNER_TEMP 'unity-test-results.xml'
-          if (Test-Path $resultsPath) {
-            try {
-              [xml]$results = Get-Content $resultsPath
-              $failedCases = @($results.SelectNodes('//test-case') |
-                Where-Object { $_.GetAttribute('result') -eq 'Failed' })
-              if ($failedCases.Count -gt 0) {
-                Write-Output '----- Failing tests (unity-test-results.xml) -----'
-                foreach ($case in $failedCases) {
-                  Write-Output "  FAILED TEST: $($case.fullname)"
-                  if ($case.failure -and $case.failure.message) {
-                    $msg = ([string]$case.failure.message.InnerText -replace '\s+', ' ').Trim()
-                    if ($msg.Length -gt 300) { $msg = $msg.Substring(0, 300) + '...' }
-                    if ($msg) { Write-Output "    Message: $msg" }
-                  }
-                  $script:allErrors += "Failed test: $($case.fullname)"
-                }
-                Write-Output ''
-              }
-            } catch {
-              Write-Output "Could not parse unity-test-results.xml - $_"
-            }
-          }
-
-          if ($script:allErrors.Count -gt 0) {
-            $first = ([string]$script:allErrors[0] -replace '\s+', ' ').Trim()
-            if ($first.Length -gt 240) { $first = $first.Substring(0, 240) + '...' }
-            $first = $first.Replace('%', '%25')
-            Write-Output "::error::First error: $first (the full list is above; complete logs are attached as the ci-logs artifact)"
-          } else {
-            Write-Output '::error::The workflow failed but no Unity error lines were captured. Check the failing step log and the ci-logs artifact. If the job hit the 90 minute timeout, Unity may have hung - close other Unity instances on the runner and run the workflow again.'
-          }
-
-          Write-Output ''
-          Write-Output 'Most common causes:'
-          Write-Output ' - error CS... lines: script compiler errors - fix the reported script and push again.'
-          Write-Output ' - License errors: open Unity Hub on the runner once and sign in so batch mode gets a valid license.'
-          Write-Output ' - Another Unity instance: close any editor that has this project open on the runner machine.'
-          Write-Output ' - Missing editor: install the exact Unity version via Unity Hub or set UNITY_EDITOR_PATH.'
-          Write-Output 'Full Unity logs: attached to this run as the ci-logs artifact.'
-          exit 0
+          Write-Output 'The exact error is printed in the failed step above.'
